@@ -1,3 +1,5 @@
+import postgres from "postgres";
+
 export type ProductRecord = {
   id: number;
   name: string;
@@ -17,19 +19,6 @@ export type LocationRecord = {
 
 export type OrderStatus = "Nuevo" | "Preparando" | "Listo" | "Entregado" | "Cancelado";
 
-type D1Result<T = unknown> = { results?: T[]; success: boolean };
-type D1Statement = {
-  bind(...values: unknown[]): D1Statement;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  first<T = unknown>(): Promise<T | null>;
-  run(): Promise<D1Result>;
-};
-type Database = {
-  prepare(query: string): D1Statement;
-  batch(statements: D1Statement[]): Promise<D1Result[]>;
-  exec(query: string): Promise<unknown>;
-};
-
 const initialProducts = [
   ["Burger de la casa", "Carne artesanal, queso, tocineta y salsa de la casa", 24900, "Hamburguesas", "🍔"],
   ["Perro especial", "Salchicha premium, queso, papitas y tres salsas", 18900, "Perros", "🌭"],
@@ -44,56 +33,61 @@ const initialLocations = [
   ["Barra 01", "Barra"], ["Barra 02", "Barra"], ["Para llevar", "Otro"],
 ] as const;
 
+let client: ReturnType<typeof postgres> | null = null;
 let initialized: Promise<void> | null = null;
 
-async function database(): Promise<Database> {
-  const workers = await import("cloudflare:workers");
-  const db = (workers.env as unknown as { DB?: Database }).DB;
-  if (!db) throw new Error("La base de datos no está configurada.");
-  return db;
+function database() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Falta configurar DATABASE_URL.");
+  client ??= postgres(connectionString, {
+    max: 5,
+    idle_timeout: 20,
+    connect_timeout: 15,
+    prepare: false,
+    ssl: "require",
+  });
+  return client;
 }
 
 export async function ensureDatabase() {
   if (!initialized) {
     initialized = (async () => {
-      const db = await database();
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS products (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-          description TEXT NOT NULL DEFAULT '', price INTEGER NOT NULL,
-          category TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '🍽️',
-          active INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS locations (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
-          type TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
-        );
-        CREATE TABLE IF NOT EXISTS orders (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, location_id INTEGER,
-          location_name TEXT NOT NULL, customer_name TEXT NOT NULL,
-          notes TEXT NOT NULL DEFAULT '', total INTEGER NOT NULL,
-          status TEXT NOT NULL DEFAULT 'Nuevo', created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS order_items (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL,
-          product_id INTEGER NOT NULL, product_name TEXT NOT NULL,
-          unit_price INTEGER NOT NULL, quantity INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
-      `);
-      const productCount = await db.prepare("SELECT COUNT(*) AS count FROM products").first<{ count: number }>();
-      if (!productCount?.count) {
-        await db.batch(initialProducts.map((p) =>
-          db.prepare("INSERT INTO products (name, description, price, category, icon, active) VALUES (?, ?, ?, ?, ?, 1)").bind(...p)
-        ));
+      const sql = database();
+      await sql`CREATE TABLE IF NOT EXISTS products (
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        price INTEGER NOT NULL CHECK (price >= 0), category TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT '🍽️', active BOOLEAN NOT NULL DEFAULT TRUE
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS locations (
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+        type TEXT NOT NULL CHECK (type IN ('Mesa','Barra','Otro')),
+        active BOOLEAN NOT NULL DEFAULT TRUE
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS orders (
+        id BIGSERIAL PRIMARY KEY, location_id BIGINT REFERENCES locations(id),
+        location_name TEXT NOT NULL, customer_name TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '', total INTEGER NOT NULL CHECK (total >= 0),
+        status TEXT NOT NULL DEFAULT 'Nuevo',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS order_items (
+        id BIGSERIAL PRIMARY KEY, order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        product_id BIGINT NOT NULL, product_name TEXT NOT NULL,
+        unit_price INTEGER NOT NULL, quantity INTEGER NOT NULL CHECK (quantity > 0)
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC)`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)`;
+      const [{ count: productCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM products`;
+      if (productCount === 0) {
+        for (const product of initialProducts) {
+          await sql`INSERT INTO products (name, description, price, category, icon) VALUES (${product[0]}, ${product[1]}, ${product[2]}, ${product[3]}, ${product[4]})`;
+        }
       }
-      const locationCount = await db.prepare("SELECT COUNT(*) AS count FROM locations").first<{ count: number }>();
-      if (!locationCount?.count) {
-        await db.batch(initialLocations.map((l) =>
-          db.prepare("INSERT INTO locations (name, type, active) VALUES (?, ?, 1)").bind(...l)
-        ));
+      const [{ count: locationCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM locations`;
+      if (locationCount === 0) {
+        for (const location of initialLocations) {
+          await sql`INSERT INTO locations (name, type) VALUES (${location[0]}, ${location[1]})`;
+        }
       }
     })().catch((error) => {
       initialized = null;
@@ -105,15 +99,12 @@ export async function ensureDatabase() {
 
 export async function publicData() {
   await ensureDatabase();
-  const db = await database();
+  const sql = database();
   const [products, locations] = await Promise.all([
-    db.prepare("SELECT * FROM products WHERE active = 1 ORDER BY category, id").all<Omit<ProductRecord, "active"> & { active: number }>(),
-    db.prepare("SELECT * FROM locations WHERE active = 1 ORDER BY id").all<Omit<LocationRecord, "active"> & { active: number }>(),
+    sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, active FROM products WHERE active = TRUE ORDER BY category, id`,
+    sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations WHERE active = TRUE ORDER BY id`,
   ]);
-  return {
-    products: (products.results ?? []).map((p) => ({ ...p, active: Boolean(p.active) })),
-    locations: (locations.results ?? []).map((l) => ({ ...l, active: Boolean(l.active) })),
-  };
+  return { products, locations };
 }
 
 export async function createOrder(input: {
@@ -123,11 +114,11 @@ export async function createOrder(input: {
   items: { productId: number; quantity: number }[];
 }) {
   await ensureDatabase();
-  const db = await database();
+  const sql = database();
   const customerName = input.customerName.trim().slice(0, 80);
   const notes = (input.notes ?? "").trim().slice(0, 500);
   if (!customerName || !Number.isInteger(input.locationId) || !input.items.length) throw new Error("Pedido incompleto.");
-  const location = await db.prepare("SELECT id, name FROM locations WHERE id = ? AND active = 1").bind(input.locationId).first<{ id: number; name: string }>();
+  const [location] = await sql<{ id: number; name: string }[]>`SELECT id::int, name FROM locations WHERE id = ${input.locationId} AND active = TRUE`;
   if (!location) throw new Error("La ubicación seleccionada no está disponible.");
   const quantities = new Map<number, number>();
   for (const item of input.items) {
@@ -135,41 +126,49 @@ export async function createOrder(input: {
     quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
   }
   const ids = [...quantities.keys()];
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = await db.prepare(`SELECT id, name, price FROM products WHERE active = 1 AND id IN (${placeholders})`).bind(...ids).all<{ id: number; name: string; price: number }>();
-  const products = rows.results ?? [];
+  const products = await sql<{ id: number; name: string; price: number }[]>`
+    SELECT id::int, name, price FROM products WHERE active = TRUE AND id IN ${sql(ids)}
+  `;
   if (products.length !== ids.length) throw new Error("Uno de los productos ya no está disponible.");
-  const total = products.reduce((sum, p) => sum + p.price * (quantities.get(p.id) ?? 0), 0);
-  const now = new Date().toISOString();
-  const created = await db.prepare(
-    "INSERT INTO orders (location_id, location_name, customer_name, notes, total, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'Nuevo', ?, ?) RETURNING id"
-  ).bind(location.id, location.name, customerName, notes, total, now, now).first<{ id: number }>();
-  if (!created) throw new Error("No fue posible crear el pedido.");
-  await db.batch(products.map((p) => db.prepare(
-    "INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity) VALUES (?, ?, ?, ?, ?)"
-  ).bind(created.id, p.id, p.name, p.price, quantities.get(p.id) ?? 0)));
-  return { id: created.id, total, locationName: location.name, status: "Nuevo" as const };
+  const total = products.reduce((sum, product) => sum + product.price * (quantities.get(product.id) ?? 0), 0);
+  return sql.begin(async (transaction) => {
+    const [created] = await transaction<{ id: number }[]>`
+      INSERT INTO orders (location_id, location_name, customer_name, notes, total)
+      VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total})
+      RETURNING id::int
+    `;
+    for (const product of products) {
+      await transaction`
+        INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity)
+        VALUES (${created.id}, ${product.id}, ${product.name}, ${product.price}, ${quantities.get(product.id) ?? 0})
+      `;
+    }
+    return { id: created.id, total, locationName: location.name, status: "Nuevo" as const };
+  });
 }
 
 export async function adminData() {
   await ensureDatabase();
-  const db = await database();
-  const [products, locations, orders, items, stats] = await Promise.all([
-    db.prepare("SELECT * FROM products ORDER BY id").all<Omit<ProductRecord, "active"> & { active: number }>(),
-    db.prepare("SELECT * FROM locations ORDER BY id").all<Omit<LocationRecord, "active"> & { active: number }>(),
-    db.prepare("SELECT * FROM orders ORDER BY created_at DESC LIMIT 100").all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM order_items WHERE order_id IN (SELECT id FROM orders ORDER BY created_at DESC LIMIT 100) ORDER BY id").all<Record<string, unknown>>(),
-    db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS sales, COALESCE(AVG(total), 0) AS average FROM orders WHERE date(created_at) = date('now') AND status != 'Cancelado'").first<{ count: number; sales: number; average: number }>(),
+  const sql = database();
+  const [products, locations, orders, items, [stats]] = await Promise.all([
+    sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, active FROM products ORDER BY id`,
+    sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
+    sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 100`,
+    sql<Record<string, unknown>[]>`SELECT order_id::int, product_id::int, product_name, unit_price, quantity FROM order_items WHERE order_id IN (SELECT id FROM orders ORDER BY created_at DESC LIMIT 100) ORDER BY id`,
+    sql<{ count: number; sales: number; average: number }[]>`
+      SELECT COUNT(*)::int AS count, COALESCE(SUM(total), 0)::int AS sales,
+      COALESCE(AVG(total), 0)::int AS average FROM orders
+      WHERE created_at >= CURRENT_DATE AND status != 'Cancelado'
+    `,
   ]);
-  const orderItems = items.results ?? [];
   return {
-    products: (products.results ?? []).map((p) => ({ ...p, active: Boolean(p.active) })),
-    locations: (locations.results ?? []).map((l) => ({ ...l, active: Boolean(l.active) })),
-    orders: (orders.results ?? []).map((o) => ({
-      id: o.id, locationId: o.location_id, locationName: o.location_name,
-      customerName: o.customer_name, notes: o.notes, total: o.total,
-      status: o.status, createdAt: o.created_at,
-      items: orderItems.filter((item) => item.order_id === o.id).map((item) => ({
+    products,
+    locations,
+    orders: orders.map((order) => ({
+      id: order.id, locationId: order.location_id, locationName: order.location_name,
+      customerName: order.customer_name, notes: order.notes, total: order.total,
+      status: order.status, createdAt: order.created_at,
+      items: items.filter((item) => item.order_id === order.id).map((item) => ({
         productId: item.product_id, productName: item.product_name,
         unitPrice: item.unit_price, quantity: item.quantity,
       })),
@@ -180,33 +179,38 @@ export async function adminData() {
 
 export async function saveProduct(input: Partial<ProductRecord> & { name: string; price: number; category: string }) {
   await ensureDatabase();
-  const db = await database();
-  const values = [input.name.trim().slice(0, 100), (input.description ?? "").trim().slice(0, 500), Math.round(input.price), input.category.trim().slice(0, 60), (input.icon ?? "🍽️").slice(0, 12), input.active === false ? 0 : 1];
-  if (!values[0] || !values[3] || !Number.isFinite(input.price) || input.price < 0) throw new Error("Datos de producto inválidos.");
+  const sql = database();
+  const name = input.name.trim().slice(0, 100);
+  const description = (input.description ?? "").trim().slice(0, 500);
+  const category = input.category.trim().slice(0, 60);
+  const icon = (input.icon ?? "🍽️").slice(0, 12);
+  const price = Math.round(input.price);
+  const active = input.active !== false;
+  if (!name || !category || !Number.isFinite(price) || price < 0) throw new Error("Datos de producto inválidos.");
   if (input.id) {
-    await db.prepare("UPDATE products SET name=?, description=?, price=?, category=?, icon=?, active=? WHERE id=?").bind(...values, input.id).run();
+    await sql`UPDATE products SET name=${name}, description=${description}, price=${price}, category=${category}, icon=${icon}, active=${active} WHERE id=${input.id}`;
     return { id: input.id };
   }
-  const row = await db.prepare("INSERT INTO products (name,description,price,category,icon,active) VALUES (?,?,?,?,?,?) RETURNING id").bind(...values).first<{ id: number }>();
+  const [row] = await sql<{ id: number }[]>`INSERT INTO products (name,description,price,category,icon,active) VALUES (${name},${description},${price},${category},${icon},${active}) RETURNING id::int`;
   return row;
 }
 
 export async function saveLocation(input: Partial<LocationRecord> & { name: string; type: LocationRecord["type"] }) {
   await ensureDatabase();
-  const db = await database();
+  const sql = database();
   const name = input.name.trim().slice(0, 80);
+  const active = input.active !== false;
   if (!name || !["Mesa", "Barra", "Otro"].includes(input.type)) throw new Error("Datos de ubicación inválidos.");
   if (input.id) {
-    await db.prepare("UPDATE locations SET name=?, type=?, active=? WHERE id=?").bind(name, input.type, input.active === false ? 0 : 1, input.id).run();
+    await sql`UPDATE locations SET name=${name}, type=${input.type}, active=${active} WHERE id=${input.id}`;
     return { id: input.id };
   }
-  const row = await db.prepare("INSERT INTO locations (name,type,active) VALUES (?,?,?) RETURNING id").bind(name, input.type, input.active === false ? 0 : 1).first<{ id: number }>();
+  const [row] = await sql<{ id: number }[]>`INSERT INTO locations (name,type,active) VALUES (${name},${input.type},${active}) RETURNING id::int`;
   return row;
 }
 
 export async function updateOrderStatus(id: number, status: OrderStatus) {
   await ensureDatabase();
   if (!["Nuevo", "Preparando", "Listo", "Entregado", "Cancelado"].includes(status)) throw new Error("Estado inválido.");
-  const db = await database();
-  await db.prepare("UPDATE orders SET status=?, updated_at=? WHERE id=?").bind(status, new Date().toISOString(), id).run();
+  await database()`UPDATE orders SET status=${status}, updated_at=NOW() WHERE id=${id}`;
 }

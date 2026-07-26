@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
@@ -39,11 +40,11 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   }, []);
 
   useEffect(() => {
-    load();
+    const initial = window.setTimeout(() => load(), 0);
     const timer = window.setInterval(() => load(true), 10000);
     const handler = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPrompt); };
     window.addEventListener("beforeinstallprompt", handler);
-    return () => { window.clearInterval(timer); window.removeEventListener("beforeinstallprompt", handler); };
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); window.removeEventListener("beforeinstallprompt", handler); };
   }, [load]);
 
   async function action(name: string, payload: Record<string, unknown>) {
@@ -70,10 +71,10 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
     <aside className="sidebar">
       <div className="brand"><span>ML</span><div>Mesa Lista<small>Panel del local</small></div></div>
       <nav><button className="active">▦ <span>Pedidos</span><b>{activeOrders.filter((o) => o.status === "Nuevo").length}</b></button><button onClick={() => document.getElementById("products")?.scrollIntoView()}>◫ <span>Productos</span></button><button onClick={() => document.getElementById("locations")?.scrollIntoView()}>⌁ <span>Mesas y barra</span></button></nav>
-      <a className="view-menu" href="/">Ver menú del cliente ↗</a>
+      <Link className="view-menu" href="/">Ver menú del cliente ↗</Link>
     </aside>
     <section className="admin-main">
-      <header className="admin-top"><div><p>{date}</p><h1>Hola, {displayName}</h1></div><div className="open-pill"><i /> Sistema conectado</div></header>
+      <header className="admin-top"><div><p>{date}</p><h1>Hola, {displayName}</h1></div><div className="admin-actions"><div className="open-pill"><i /> Sistema conectado</div><button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/admin/login"; }}>Salir</button></div></header>
       {error && <div className="system-message error-message">{error}<button onClick={() => load()}>Reintentar</button></div>}
       {!data ? <div className="system-message">Cargando pedidos y menú…</div> : <>
         <div className="stats"><article><span>Pedidos hoy</span><strong>{data.stats.count}</strong><em>{activeOrders.length} pedidos activos</em></article><article><span>Ventas hoy</span><strong>{money(data.stats.sales)}</strong><em>Pedidos no cancelados</em></article><article><span>Ticket promedio</span><strong>{money(data.stats.average)}</strong><em>{data.locations.filter((l) => l.active).length} ubicaciones disponibles</em></article></div>
