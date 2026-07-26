@@ -19,6 +19,14 @@ export type LocationRecord = {
 
 export type OrderStatus = "Nuevo" | "Preparando" | "Listo" | "Entregado" | "Cancelado";
 
+export type RestaurantSettings = {
+  name: string;
+  tagline: string;
+  welcomeMessage: string;
+  currency: string;
+  acceptingOrders: boolean;
+};
+
 const initialProducts = [
   ["Burger de la casa", "Carne artesanal, queso, tocineta y salsa de la casa", 24900, "Hamburguesas", "🍔"],
   ["Perro especial", "Salchicha premium, queso, papitas y tres salsas", 18900, "Perros", "🌭"],
@@ -75,6 +83,16 @@ export async function ensureDatabase() {
         product_id BIGINT NOT NULL, product_name TEXT NOT NULL,
         unit_price INTEGER NOT NULL, quantity INTEGER NOT NULL CHECK (quantity > 0)
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS restaurant_settings (
+        id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        name TEXT NOT NULL DEFAULT 'Mesa Lista',
+        tagline TEXT NOT NULL DEFAULT 'Comida que provoca',
+        welcome_message TEXT NOT NULL DEFAULT 'Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.',
+        currency TEXT NOT NULL DEFAULT 'COP',
+        accepting_orders BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+      await sql`INSERT INTO restaurant_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
       await sql`CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at DESC)`;
       await sql`CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)`;
       const [{ count: productCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM products`;
@@ -100,11 +118,12 @@ export async function ensureDatabase() {
 export async function publicData() {
   await ensureDatabase();
   const sql = database();
-  const [products, locations] = await Promise.all([
+  const [products, locations, [settings]] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, active FROM products WHERE active = TRUE ORDER BY category, id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations WHERE active = TRUE ORDER BY id`,
+    sql<RestaurantSettings[]>`SELECT name, tagline, welcome_message AS "welcomeMessage", currency, accepting_orders AS "acceptingOrders" FROM restaurant_settings WHERE id = 1`,
   ]);
-  return { products, locations };
+  return { products, locations, settings };
 }
 
 export async function createOrder(input: {
@@ -118,6 +137,8 @@ export async function createOrder(input: {
   const customerName = input.customerName.trim().slice(0, 80);
   const notes = (input.notes ?? "").trim().slice(0, 500);
   if (!customerName || !Number.isInteger(input.locationId) || !input.items.length) throw new Error("Pedido incompleto.");
+  const [settings] = await sql<{ acceptingOrders: boolean }[]>`SELECT accepting_orders AS "acceptingOrders" FROM restaurant_settings WHERE id = 1`;
+  if (settings && !settings.acceptingOrders) throw new Error("El local no está recibiendo pedidos en este momento.");
   const [location] = await sql<{ id: number; name: string }[]>`SELECT id::int, name FROM locations WHERE id = ${input.locationId} AND active = TRUE`;
   if (!location) throw new Error("La ubicación seleccionada no está disponible.");
   const quantities = new Map<number, number>();
@@ -150,7 +171,7 @@ export async function createOrder(input: {
 export async function adminData() {
   await ensureDatabase();
   const sql = database();
-  const [products, locations, orders, items, [stats]] = await Promise.all([
+  const [products, locations, orders, items, [stats], [settings]] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 100`,
@@ -160,6 +181,7 @@ export async function adminData() {
       COALESCE(AVG(total), 0)::int AS average FROM orders
       WHERE created_at >= CURRENT_DATE AND status != 'Cancelado'
     `,
+    sql<RestaurantSettings[]>`SELECT name, tagline, welcome_message AS "welcomeMessage", currency, accepting_orders AS "acceptingOrders" FROM restaurant_settings WHERE id = 1`,
   ]);
   return {
     products,
@@ -174,6 +196,7 @@ export async function adminData() {
       })),
     })),
     stats: { count: stats?.count ?? 0, sales: stats?.sales ?? 0, average: Math.round(stats?.average ?? 0) },
+    settings,
   };
 }
 
@@ -207,6 +230,32 @@ export async function saveLocation(input: Partial<LocationRecord> & { name: stri
   }
   const [row] = await sql<{ id: number }[]>`INSERT INTO locations (name,type,active) VALUES (${name},${input.type},${active}) RETURNING id::int`;
   return row;
+}
+
+export async function deleteLocation(id: number) {
+  await ensureDatabase();
+  const sql = database();
+  if (!Number.isInteger(id)) throw new Error("Ubicación inválida.");
+  const [{ count }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM orders WHERE location_id = ${id}`;
+  if (count > 0) {
+    await sql`UPDATE locations SET active = FALSE WHERE id = ${id}`;
+    return { deleted: false, hidden: true };
+  }
+  await sql`DELETE FROM locations WHERE id = ${id}`;
+  return { deleted: true, hidden: false };
+}
+
+export async function saveSettings(input: RestaurantSettings) {
+  await ensureDatabase();
+  const sql = database();
+  const name = input.name.trim().slice(0, 100);
+  const tagline = input.tagline.trim().slice(0, 140);
+  const welcomeMessage = input.welcomeMessage.trim().slice(0, 300);
+  if (!name || !tagline || !welcomeMessage) throw new Error("Complete los datos del restaurante.");
+  await sql`UPDATE restaurant_settings SET
+    name = ${name}, tagline = ${tagline}, welcome_message = ${welcomeMessage},
+    currency = 'COP', accepting_orders = ${Boolean(input.acceptingOrders)}, updated_at = NOW()
+    WHERE id = 1`;
 }
 
 export async function updateOrderStatus(id: number, status: OrderStatus) {

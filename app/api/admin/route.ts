@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminData, saveLocation, saveProduct, updateOrderStatus } from "../../../db/service";
+import { adminData, createOrder, deleteLocation, saveLocation, saveProduct, saveSettings, updateOrderStatus } from "../../../db/service";
 import { isAdminRequest } from "../../../lib/admin-auth";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as { action: string; data: Record<string, unknown> };
     if (body.action === "saveProduct") await saveProduct(body.data as never);
     else if (body.action === "saveLocation") await saveLocation(body.data as never);
+    else if (body.action === "deleteLocation") await deleteLocation(Number(body.data.id));
     else if (body.action === "orderStatus") await updateOrderStatus(Number(body.data.id), String(body.data.status) as never);
+    else if (body.action === "createOrder") await createOrder(body.data as never);
+    else if (body.action === "saveSettings") await saveSettings(body.data as never);
     else return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
     return NextResponse.json({ ok: true });
   } catch (error) {

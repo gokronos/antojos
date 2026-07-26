@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 type Product = { id: number; name: string; description: string; price: number; category: string; icon: string; active: boolean };
 type Location = { id: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
 type CartItem = Product & { qty: number };
+type Settings = { name: string; tagline: string; welcomeMessage: string; acceptingOrders: boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 
 const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
@@ -12,6 +13,7 @@ const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency",
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [settings, setSettings] = useState<Settings>({ name: "Mesa Lista", tagline: "Comida que provoca", welcomeMessage: "Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.", acceptingOrders: true });
   const [cart, setCart] = useState<CartItem[]>([]);
   const [category, setCategory] = useState("Todos");
   const [search, setSearch] = useState("");
@@ -33,6 +35,7 @@ export default function Home() {
         if (!response.ok) throw new Error(data.error);
         setProducts(data.products);
         setLocations(data.locations);
+        if (data.settings) setSettings(data.settings);
         const requested = new URLSearchParams(window.location.search).get("mesa");
         const normalized = requested?.toLowerCase().replace(/[-_]/g, " ");
         const selected = data.locations.find((l: Location) =>
@@ -99,12 +102,12 @@ export default function Home() {
   return (
     <main className="customer">
       <header className="menu-head">
-        <div className="brand"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div>
+        <div className="brand"><span>ML</span><div>{settings.name}<small>{settings.tagline}</small></div></div>
         <a href="/admin" className="admin-link">Panel del local</a>
         <button className="bag" onClick={() => setCartOpen(true)}>🛍️ <b>{count}</b></button>
       </header>
       <section className="hero">
-        <div><span className="eyebrow">BIENVENIDOS · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>¿Qué se le antoja<br />comer hoy?</h1><p>Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.</p></div>
+        <div><span className="eyebrow">BIENVENIDOS · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>¿Qué se le antoja<br />comer hoy?</h1><p>{settings.welcomeMessage}</p>{!settings.acceptingOrders && <b className="closed-banner">El local está pausado · Puede consultar el menú</b>}</div>
         <div className="hero-dish"><span>🍔</span><i>100%<br /><small>artesanal</small></i></div>
       </section>
       <section className="menu-area">
@@ -119,7 +122,7 @@ export default function Home() {
       {count > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}><span><b>{count}</b> Ver pedido</span><strong>{money(total)}</strong></button>}
       {cartOpen && <div className="drawer-back" onClick={() => setCartOpen(false)}><aside className="cart" onClick={(e) => e.stopPropagation()}><button className="close" onClick={() => setCartOpen(false)}>×</button><span className="eyebrow">SU PEDIDO</span><h2>Todo listo para ordenar</h2><p className="table-tag">📍 {location?.name ?? "Sin ubicación"}</p>
         <div className="cart-items">{cart.map((item) => <div key={item.id}><span>{item.icon}</span><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => changeQty(item.id, -1)}>−</button><b>{item.qty}</b><button onClick={() => changeQty(item.id, 1)}>＋</button></div></div>)}</div>
-        <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length} onClick={() => { setCartOpen(false); setCheckout(true); }}>Continuar pedido →</button>
+        <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length || !settings.acceptingOrders} onClick={() => { setCartOpen(false); setCheckout(true); }}>{settings.acceptingOrders ? "Continuar pedido →" : "Pedidos pausados"}</button>
       </aside></div>}
       {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido y llevarlo al lugar correcto.</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>¿Dónde está?<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>Alerta al local</strong><small>El pedido aparecerá inmediatamente en el panel</small></div></div><button className="checkout-btn" disabled={!name.trim() || sending || !locationId} onClick={submitOrder}>{sending ? "Enviando…" : `Enviar pedido · ${money(total)}`}</button></div></div>}
       {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido recibido!</h2><p>El pedido ya apareció en el panel del local.</p><b>Pedido #{success.id} · {success.locationName}</b><button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
