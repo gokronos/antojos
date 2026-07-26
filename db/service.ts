@@ -1,5 +1,3 @@
-import { env } from "cloudflare:workers";
-
 export type ProductRecord = {
   id: number;
   name: string;
@@ -48,8 +46,9 @@ const initialLocations = [
 
 let initialized: Promise<void> | null = null;
 
-function database(): Database {
-  const db = (env as unknown as { DB?: Database }).DB;
+async function database(): Promise<Database> {
+  const workers = await import("cloudflare:workers");
+  const db = (workers.env as unknown as { DB?: Database }).DB;
   if (!db) throw new Error("La base de datos no está configurada.");
   return db;
 }
@@ -57,7 +56,7 @@ function database(): Database {
 export async function ensureDatabase() {
   if (!initialized) {
     initialized = (async () => {
-      const db = database();
+      const db = await database();
       await db.exec(`
         CREATE TABLE IF NOT EXISTS products (
           id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
@@ -106,7 +105,7 @@ export async function ensureDatabase() {
 
 export async function publicData() {
   await ensureDatabase();
-  const db = database();
+  const db = await database();
   const [products, locations] = await Promise.all([
     db.prepare("SELECT * FROM products WHERE active = 1 ORDER BY category, id").all<Omit<ProductRecord, "active"> & { active: number }>(),
     db.prepare("SELECT * FROM locations WHERE active = 1 ORDER BY id").all<Omit<LocationRecord, "active"> & { active: number }>(),
@@ -124,7 +123,7 @@ export async function createOrder(input: {
   items: { productId: number; quantity: number }[];
 }) {
   await ensureDatabase();
-  const db = database();
+  const db = await database();
   const customerName = input.customerName.trim().slice(0, 80);
   const notes = (input.notes ?? "").trim().slice(0, 500);
   if (!customerName || !Number.isInteger(input.locationId) || !input.items.length) throw new Error("Pedido incompleto.");
@@ -154,7 +153,7 @@ export async function createOrder(input: {
 
 export async function adminData() {
   await ensureDatabase();
-  const db = database();
+  const db = await database();
   const [products, locations, orders, items, stats] = await Promise.all([
     db.prepare("SELECT * FROM products ORDER BY id").all<Omit<ProductRecord, "active"> & { active: number }>(),
     db.prepare("SELECT * FROM locations ORDER BY id").all<Omit<LocationRecord, "active"> & { active: number }>(),
@@ -181,7 +180,7 @@ export async function adminData() {
 
 export async function saveProduct(input: Partial<ProductRecord> & { name: string; price: number; category: string }) {
   await ensureDatabase();
-  const db = database();
+  const db = await database();
   const values = [input.name.trim().slice(0, 100), (input.description ?? "").trim().slice(0, 500), Math.round(input.price), input.category.trim().slice(0, 60), (input.icon ?? "🍽️").slice(0, 12), input.active === false ? 0 : 1];
   if (!values[0] || !values[3] || !Number.isFinite(input.price) || input.price < 0) throw new Error("Datos de producto inválidos.");
   if (input.id) {
@@ -194,7 +193,7 @@ export async function saveProduct(input: Partial<ProductRecord> & { name: string
 
 export async function saveLocation(input: Partial<LocationRecord> & { name: string; type: LocationRecord["type"] }) {
   await ensureDatabase();
-  const db = database();
+  const db = await database();
   const name = input.name.trim().slice(0, 80);
   if (!name || !["Mesa", "Barra", "Otro"].includes(input.type)) throw new Error("Datos de ubicación inválidos.");
   if (input.id) {
@@ -208,5 +207,6 @@ export async function saveLocation(input: Partial<LocationRecord> & { name: stri
 export async function updateOrderStatus(id: number, status: OrderStatus) {
   await ensureDatabase();
   if (!["Nuevo", "Preparando", "Listo", "Entregado", "Cancelado"].includes(status)) throw new Error("Estado inválido.");
-  await database().prepare("UPDATE orders SET status=?, updated_at=? WHERE id=?").bind(status, new Date().toISOString(), id).run();
+  const db = await database();
+  await db.prepare("UPDATE orders SET status=?, updated_at=? WHERE id=?").bind(status, new Date().toISOString(), id).run();
 }
