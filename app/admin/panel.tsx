@@ -1,15 +1,18 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- data URLs are optimized client-side before persistence */
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; active: boolean };
+type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
 type OrderStatus = "Nuevo" | "Preparando" | "Listo" | "Entregado" | "Cancelado";
 type Order = { id: number; locationName: string; customerName: string; notes: string; total: number; status: OrderStatus; createdAt: string; items: { productId: number; productName: string; quantity: number }[] };
-type Settings = { name: string; tagline: string; welcomeMessage: string; currency: string; acceptingOrders: boolean };
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number }; settings: Settings };
-type Section = "orders" | "products" | "locations" | "history" | "settings";
+type Settings = { name: string; tagline: string; welcomeMessage: string; currency: string; acceptingOrders: boolean; logo: string; primaryColor: string; accentColor: string; backgroundColor: string; address: string; phone: string; whatsapp: string; mapUrl: string };
+type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
+type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[] };
+type Section = "orders" | "products" | "locations" | "history" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
@@ -22,6 +25,28 @@ const ago = (date: string) => {
   return new Date(date).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 };
 
+async function optimizedImage(file: File, maxWidth = 1400) {
+  if (!file.type.startsWith("image/")) throw new Error("Seleccione una imagen válida.");
+  const source = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("No fue posible leer la imagen."));
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("La imagen no es válida."));
+    element.src = source;
+  });
+  const scale = Math.min(1, maxWidth / image.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/webp", .8);
+}
+
 export default function AdminPanel({ displayName }: { displayName: string }) {
   const [data, setData] = useState<AdminData | null>(null);
   const [section, setSection] = useState<Section>("orders");
@@ -31,6 +56,8 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [manualOrder, setManualOrder] = useState<ManualOrder | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<Settings | null>(null);
+  const [brandingDraft, setBrandingDraft] = useState<Settings | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDay[]>([]);
   const [saving, setSaving] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
 
@@ -41,6 +68,8 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
       if (!response.ok) throw new Error(result.error);
       setData(result);
       setSettingsDraft((current) => current ?? result.settings);
+      setBrandingDraft((current) => current ?? result.settings);
+      setScheduleDraft((current) => current.length ? current : result.schedule);
       setError("");
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "No fue posible cargar el panel.");
@@ -100,6 +129,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
         <button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>◫ <span>Productos</span></button>
         <button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}>⌁ <span>Mesas y barra</span></button>
         <button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}>◷ <span>Historial</span></button>
+        <button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}>✦ <span>Diseño y negocio</span></button>
         <button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>⚙ <span>Configuración</span></button>
       </nav>
       <Link className="view-menu" href="/">Ver menú del cliente ↗</Link>
@@ -131,7 +161,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
         </>}
 
         {section === "products" && <>
-          <div className="section-title page-section-title"><div><h2>Productos</h2><p>{data.products.filter((product) => product.active).length} disponibles en el menú</p></div><button onClick={() => setEditingProduct({ name: "", description: "", price: 0, category: "Hamburguesas", icon: "🍽️", active: true })}>＋ Agregar producto</button></div>
+          <div className="section-title page-section-title"><div><h2>Productos</h2><p>{data.products.filter((product) => product.active).length} disponibles en el menú</p></div><button onClick={() => setEditingProduct({ name: "", description: "", price: 0, category: "Hamburguesas", icon: "🍽️", images: [], active: true })}>＋ Agregar producto</button></div>
           <div className="product-table">{data.products.map((product) => <div className="product-row" key={product.id}><span className="mini-food">{product.icon}</span><div><strong>{product.name}</strong><small>{product.category}</small></div><b>{money(product.price)}</b><label className="switch"><input type="checkbox" checked={product.active} onChange={() => action("saveProduct", { ...product, active: !product.active })} /><span /></label><button className="edit" onClick={() => setEditingProduct({ ...product })}>Editar</button></div>)}</div>
         </>}
 
@@ -152,6 +182,26 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
             <div className="history-head"><span>Pedido</span><span>Cliente</span><span>Fecha</span><span>Total</span><span>Estado</span></div>
             {history.length === 0 ? <div className="empty-state">Los pedidos terminados aparecerán aquí.</div> : history.map((order) => <div className="history-row" key={order.id}><strong>#{order.id} · {order.locationName}</strong><span>{order.customerName}</span><span>{new Date(order.createdAt).toLocaleString("es-CO")}</span><b>{money(order.total)}</b><em className={`status ${order.status.toLowerCase()}`}>{order.status}</em></div>)}
           </div>
+        </>}
+
+        {section === "branding" && brandingDraft && <>
+          <div className="section-title page-section-title"><div><h2>Diseño y datos del negocio</h2><p>Personalice lo que ven sus clientes</p></div><button onClick={async () => { if (await action("saveBranding", brandingDraft as unknown as Record<string, unknown>, "Identidad del negocio guardada.")) setBrandingDraft({ ...brandingDraft }); }}>Guardar cambios</button></div>
+          <div className="branding-grid">
+            <form className="brand-form" onSubmit={async (event) => { event.preventDefault(); await action("saveBranding", brandingDraft as unknown as Record<string, unknown>, "Identidad del negocio guardada."); }}>
+              <h3>Identidad visual</h3>
+              <div className="logo-upload"><div>{brandingDraft.logo ? <img src={brandingDraft.logo} alt="Logo" /> : <span>{brandingDraft.name.slice(0,2).toUpperCase()}</span>}</div><label>Subir logo<input type="file" accept="image/*" onChange={async (event) => { const file=event.target.files?.[0]; if(file) setBrandingDraft({ ...brandingDraft, logo: await optimizedImage(file, 600) }); }} /></label>{brandingDraft.logo && <button type="button" onClick={() => setBrandingDraft({ ...brandingDraft, logo: "" })}>Quitar</button>}</div>
+              <div className="form-row"><label>Nombre del negocio<input value={brandingDraft.name} onChange={(event) => setBrandingDraft({ ...brandingDraft, name:event.target.value })} /></label><label>Frase corta<input value={brandingDraft.tagline} onChange={(event) => setBrandingDraft({ ...brandingDraft, tagline:event.target.value })} /></label></div>
+              <h3>Colores</h3><div className="color-grid"><ColorInput label="Principal" value={brandingDraft.primaryColor} onChange={(value) => setBrandingDraft({ ...brandingDraft, primaryColor:value })} /><ColorInput label="Acento" value={brandingDraft.accentColor} onChange={(value) => setBrandingDraft({ ...brandingDraft, accentColor:value })} /><ColorInput label="Fondo" value={brandingDraft.backgroundColor} onChange={(value) => setBrandingDraft({ ...brandingDraft, backgroundColor:value })} /></div>
+              <button className="save" disabled={saving}>{saving ? "Guardando…" : "Guardar identidad"}</button>
+            </form>
+            <form className="brand-form" onSubmit={async (event) => { event.preventDefault(); await action("saveBranding", brandingDraft as unknown as Record<string, unknown>, "Datos de contacto guardados."); }}>
+              <h3>Datos de contacto</h3><label>Dirección<input value={brandingDraft.address} onChange={(event) => setBrandingDraft({ ...brandingDraft, address:event.target.value })} /></label><div className="form-row"><label>Teléfono<input value={brandingDraft.phone} onChange={(event) => setBrandingDraft({ ...brandingDraft, phone:event.target.value })} /></label><label>WhatsApp<input value={brandingDraft.whatsapp} onChange={(event) => setBrandingDraft({ ...brandingDraft, whatsapp:event.target.value.replace(/\D/g,"") })} /></label></div><label>Enlace del mapa<input value={brandingDraft.mapUrl} onChange={(event) => setBrandingDraft({ ...brandingDraft, mapUrl:event.target.value })} /></label>
+              <div className="contact-preview"><b>Así aparecerá en el menú</b><span>⌖ {brandingDraft.address || "Sin dirección"}</span><span>☎ {brandingDraft.phone || "Sin teléfono"}</span><span>WhatsApp {brandingDraft.whatsapp || "Sin número"}</span></div><button className="save" disabled={saving}>Guardar contacto</button>
+            </form>
+          </div>
+          <ScheduleEditor schedule={scheduleDraft} saving={saving} onChange={setScheduleDraft} onSave={() => action("saveSchedule", scheduleDraft as unknown as Record<string, unknown>, "Horario guardado.")} />
+          <div className="banner-admin-head"><div><h2>Banners del menú</h2><p>Publique mensajes con texto e imagen para el slider.</p></div><button onClick={() => action("saveBanner", { eyebrow:"NUEVO MENSAJE", title:"Título del banner", text:"Escriba aquí la información que desea mostrar.", image:"", active:true, position:data.banners.length }, "Banner creado.")}>＋ Agregar banner</button></div>
+          <div className="banner-admin-list">{data.banners.map((banner,index) => <BannerEditor banner={banner} index={index} canDelete={data.banners.length > 1} saving={saving} onSave={(updated) => action("saveBanner", updated as unknown as Record<string, unknown>, "Banner guardado.")} onDelete={() => action("deleteBanner", { id:banner.id }, "Banner eliminado.")} key={banner.id} />)}</div>
         </>}
 
         {section === "settings" && settingsDraft && <>
@@ -191,12 +241,26 @@ function OrderCard({ order, saving, onStatus }: { order: Order; saving: boolean;
 function ProductModal({ product, saving, onChange, onClose, onSave }: { product: Product; saving: boolean; onChange: (product: Product) => void; onClose: () => void; onSave: () => void }) {
   return <div className="modal-back"><form className="edit-modal" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
     <button type="button" className="close" onClick={onClose}>×</button><h2>{product.id ? "Editar producto" : "Nuevo producto"}</h2><p>Los cambios aparecerán inmediatamente en el menú.</p>
+    <div className="photo-section"><div><strong>Fotografías del producto</strong><small>Puede cargar hasta cinco imágenes</small></div><div className="photo-grid">{product.images.map((src,index) => <figure key={`${src.slice(-20)}-${index}`}><img src={src} alt={`${product.name} ${index+1}`} /><button type="button" onClick={() => onChange({ ...product, images:product.images.filter((_,itemIndex) => itemIndex !== index) })}>×</button>{index===0 && <b>Principal</b>}</figure>)}{product.images.length<5 && <label className="upload-tile">＋<span>Agregar fotos</span><small>JPG, PNG o WEBP</small><input type="file" accept="image/*" multiple onChange={async (event) => { const files=Array.from(event.target.files ?? []).slice(0,5-product.images.length); const images=await Promise.all(files.map((file) => optimizedImage(file,1200))); onChange({ ...product, images:[...product.images,...images] }); event.target.value=""; }} /></label>}</div></div>
     <label>Nombre<input required value={product.name} onChange={(event) => onChange({ ...product, name: event.target.value })} /></label>
     <label>Descripción<textarea value={product.description} onChange={(event) => onChange({ ...product, description: event.target.value })} /></label>
     <div className="form-row"><label>Precio<input required min="0" type="number" value={product.price} onChange={(event) => onChange({ ...product, price: Number(event.target.value) })} /></label><label>Categoría<input required value={product.category} onChange={(event) => onChange({ ...product, category: event.target.value })} /></label></div>
     <label>Icono<input value={product.icon} onChange={(event) => onChange({ ...product, icon: event.target.value })} /></label>
     <button className="save" disabled={saving}>{saving ? "Guardando…" : "Guardar producto"}</button>
   </form></div>;
+}
+
+function ColorInput({ label, value, onChange }: { label:string; value:string; onChange:(value:string)=>void }) {
+  return <label><input type="color" value={value} onChange={(event) => onChange(event.target.value)} /><span><b>{label}</b><small>{value}</small></span></label>;
+}
+
+function ScheduleEditor({ schedule, saving, onChange, onSave }: { schedule:ScheduleDay[]; saving:boolean; onChange:(value:ScheduleDay[])=>void; onSave:()=>void }) {
+  return <article className="schedule-editor"><div className="schedule-heading"><div><span>◷</span><div><h3>Horario de atención</h3><p>Defina cuándo el local aparece abierto y recibe pedidos.</p></div></div><button disabled={saving} onClick={onSave}>{saving?"Guardando…":"Guardar horario"}</button></div><div className="schedule-days">{schedule.map((item,index) => <div className={`schedule-row ${!item.enabled?"disabled":""}`} key={item.weekday}><label className="day-toggle"><input type="checkbox" checked={item.enabled} onChange={() => onChange(schedule.map((day,itemIndex) => itemIndex===index?{...day,enabled:!day.enabled}:day))} /><span>{item.enabled?"✓":""}</span><b>{item.day}</b></label>{item.enabled ? <><label>Apertura<input type="time" value={item.openTime} onChange={(event) => onChange(schedule.map((day,itemIndex) => itemIndex===index?{...day,openTime:event.target.value}:day))} /></label><i>hasta</i><label>Cierre<input type="time" value={item.closeTime} onChange={(event) => onChange(schedule.map((day,itemIndex) => itemIndex===index?{...day,closeTime:event.target.value}:day))} /></label></> : <em>Cerrado todo el día</em>}</div>)}</div></article>;
+}
+
+function BannerEditor({ banner, index, canDelete, saving, onSave, onDelete }: { banner:Banner; index:number; canDelete:boolean; saving:boolean; onSave:(banner:Banner)=>void; onDelete:()=>void }) {
+  const [draft,setDraft]=useState(banner);
+  return <article className="banner-editor"><div className="banner-number"><span>{String(index+1).padStart(2,"0")}</span><label className="switch"><input type="checkbox" checked={draft.active} onChange={(event) => setDraft({ ...draft, active:event.target.checked })} /><span /></label></div><div className="banner-image">{draft.image ? <img src={draft.image} alt={`Banner ${index+1}`} /> : <span>Imagen del banner</span>}<label>Subir imagen<input type="file" accept="image/*" onChange={async (event) => { const file=event.target.files?.[0]; if(file) setDraft({ ...draft, image:await optimizedImage(file,1600) }); }} /></label></div><div className="banner-fields"><label>Texto superior<input value={draft.eyebrow} onChange={(event) => setDraft({ ...draft, eyebrow:event.target.value })} /></label><label>Título<input value={draft.title} onChange={(event) => setDraft({ ...draft, title:event.target.value })} /></label><label>Descripción<textarea value={draft.text} onChange={(event) => setDraft({ ...draft, text:event.target.value })} /></label><div className="banner-actions"><button disabled={saving} onClick={() => onSave(draft)}>Guardar</button><button className="banner-delete" disabled={!canDelete||saving} onClick={onDelete}>Eliminar</button></div></div></article>;
 }
 
 function LocationModal({ location, saving, onChange, onClose, onSave, onDelete }: { location: Location; saving: boolean; onChange: (location: Location) => void; onClose: () => void; onSave: () => void; onDelete?: () => void }) {

@@ -1,11 +1,15 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- restaurant images are persisted as optimized data URLs */
 
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 
-type Product = { id: number; name: string; description: string; price: number; category: string; icon: string; active: boolean };
+type Product = { id: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
 type CartItem = Product & { qty: number };
-type Settings = { name: string; tagline: string; welcomeMessage: string; acceptingOrders: boolean };
+type Settings = { name: string; tagline: string; welcomeMessage: string; acceptingOrders: boolean; logo:string; primaryColor:string; accentColor:string; backgroundColor:string; address:string; phone:string; whatsapp:string; mapUrl:string };
+type Banner = { id:number; eyebrow:string; title:string; text:string; image:string; active:boolean; position:number };
+type ScheduleDay = { weekday:number; day:string; openTime:string; closeTime:string; enabled:boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 
 const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
@@ -13,7 +17,10 @@ const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency",
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [settings, setSettings] = useState<Settings>({ name: "Mesa Lista", tagline: "Comida que provoca", welcomeMessage: "Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.", acceptingOrders: true });
+  const [settings, setSettings] = useState<Settings>({ name:"Mesa Lista",tagline:"Comida que provoca",welcomeMessage:"Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.",acceptingOrders:true,logo:"",primaryColor:"#173d2d",accentColor:"#c8ff45",backgroundColor:"#f6f1e7",address:"",phone:"",whatsapp:"",mapUrl:"" });
+  const [banners,setBanners]=useState<Banner[]>([]);
+  const [schedule,setSchedule]=useState<ScheduleDay[]>([]);
+  const [bannerIndex,setBannerIndex]=useState(0);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [category, setCategory] = useState("Todos");
   const [search, setSearch] = useState("");
@@ -36,6 +43,8 @@ export default function Home() {
         setProducts(data.products);
         setLocations(data.locations);
         if (data.settings) setSettings(data.settings);
+        setBanners(data.banners ?? []);
+        setSchedule(data.schedule ?? []);
         const requested = new URLSearchParams(window.location.search).get("mesa");
         const normalized = requested?.toLowerCase().replace(/[-_]/g, " ");
         const selected = data.locations.find((l: Location) =>
@@ -52,6 +61,12 @@ export default function Home() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
+  useEffect(() => {
+    if (banners.length < 2) return;
+    const timer = window.setInterval(() => setBannerIndex((index) => (index + 1) % banners.length), 7000);
+    return () => window.clearInterval(timer);
+  }, [banners.length]);
+
   const categories = useMemo(() => ["Todos", ...Array.from(new Set(products.map((p) => p.category)))], [products]);
   const visible = products.filter((p) =>
     (category === "Todos" || p.category === category) &&
@@ -60,6 +75,12 @@ export default function Home() {
   const location = locations.find((l) => l.id === locationId);
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const count = cart.reduce((sum, item) => sum + item.qty, 0);
+  const currentBanner=banners[bannerIndex%banners.length];
+  const colombiaDay=(new Date(new Date().toLocaleString("en-US",{timeZone:"America/Bogota"})).getDay()+6)%7;
+  const todaySchedule=schedule.find((day) => day.weekday===colombiaDay);
+  const nowTime=new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Bogota"});
+  const isOpenNow=Boolean(settings.acceptingOrders&&todaySchedule?.enabled&&nowTime>=todaySchedule.openTime&&nowTime<todaySchedule.closeTime);
+  const themeStyle={"--green":settings.primaryColor,"--lime":settings.accentColor,"--cream":settings.backgroundColor} as CSSProperties;
   const add = (product: Product) => setCart((current) => {
     const found = current.find((item) => item.id === product.id);
     return found
@@ -100,15 +121,16 @@ export default function Home() {
   }
 
   return (
-    <main className="customer">
+    <main className="customer" style={themeStyle}>
       <header className="menu-head">
-        <div className="brand"><span>ML</span><div>{settings.name}<small>{settings.tagline}</small></div></div>
+        <div className="brand customer-brand">{settings.logo?<img src={settings.logo} alt={settings.name}/>:<span>{settings.name.slice(0,2).toUpperCase()}</span>}<div>{settings.name}<small>{settings.tagline}</small></div></div>
+        <div className={`menu-open-status ${isOpenNow?"open":"closed"}`}><i/><span><b>{isOpenNow?"Abierto ahora":"Cerrado ahora"}</b><small>{todaySchedule?.day} · {todaySchedule?.enabled?`${todaySchedule.openTime} – ${todaySchedule.closeTime}`:"No hay atención"}</small></span></div>
         <a href="/admin" className="admin-link">Panel del local</a>
         <button className="bag" onClick={() => setCartOpen(true)}>🛍️ <b>{count}</b></button>
       </header>
-      <section className="hero">
-        <div><span className="eyebrow">BIENVENIDOS · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>¿Qué se le antoja<br />comer hoy?</h1><p>{settings.welcomeMessage}</p>{!settings.acceptingOrders && <b className="closed-banner">El local está pausado · Puede consultar el menú</b>}</div>
-        <div className="hero-dish"><span>🍔</span><i>100%<br /><small>artesanal</small></i></div>
+      <section className={`hero ${currentBanner?.image?"has-banner-image":""}`} style={currentBanner?.image?{backgroundImage:`linear-gradient(90deg, ${settings.primaryColor}f2 0%, ${settings.primaryColor}c9 48%, ${settings.primaryColor}33 100%), url(${currentBanner.image})`}:undefined}>
+        <div><span className="eyebrow">{currentBanner?.eyebrow||"BIENVENIDOS"} · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>{currentBanner?.title||"¿Qué se le antoja comer hoy?"}</h1><p>{currentBanner?.text||settings.welcomeMessage}</p>{!settings.acceptingOrders && <b className="closed-banner">El local está pausado · Puede consultar el menú</b>}{banners.length>1&&<div className="banner-controls"><button onClick={()=>setBannerIndex((index)=>(index-1+banners.length)%banners.length)}>←</button><span>{banners.map((banner,index)=><i className={index===bannerIndex%banners.length?"active":""} key={banner.id}/>)}</span><button onClick={()=>setBannerIndex((index)=>(index+1)%banners.length)}>→</button></div>}</div>
+        {!currentBanner?.image&&<div className="hero-dish"><span>🍔</span><i>100%<br /><small>artesanal</small></i></div>}
       </section>
       <section className="menu-area">
         <div className="menu-tools"><div><h2>Nuestro menú</h2><p>Todo preparado al momento</p></div><label className="search">⌕<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar en el menú" /></label></div>
@@ -116,9 +138,10 @@ export default function Home() {
         {error && <div className="system-message error-message">{error}</div>}
         {!loading && !error && <>
           <div className="chips">{categories.map((item) => <button className={category === item ? "active" : ""} onClick={() => setCategory(item)} key={item}>{item}</button>)}</div>
-          <div className="food-grid">{visible.map((product) => <article className="food-card" key={product.id}><div className={`food-art art-${product.id % 4}`}><span>{product.icon}</span></div><div className="food-copy"><div><h3>{product.name}</h3><p>{product.description}</p></div><footer><strong>{money(product.price)}</strong><button onClick={() => add(product)} aria-label={`Agregar ${product.name}`}>＋</button></footer></div></article>)}</div>
+          <div className="food-grid">{visible.map((product) => <article className="food-card" key={product.id}><div className={`food-art art-${product.id % 4}`}>{product.images?.[0]?<img src={product.images[0]} alt={product.name}/>:<span>{product.icon}</span>}{product.id===1&&<b>Favorito</b>}</div><div className="food-copy"><div><h3>{product.name}</h3><p>{product.description}</p></div><footer><strong>{money(product.price)}</strong><button onClick={() => add(product)} aria-label={`Agregar ${product.name}`}>＋</button></footer></div></article>)}</div>
         </>}
       </section>
+      <footer className="business-footer"><div className="brand">{settings.logo?<img src={settings.logo} alt={settings.name}/>:<span>{settings.name.slice(0,2).toUpperCase()}</span>}<div>{settings.name}<small>{settings.tagline}</small></div></div><div className="footer-hours"><b>Horario de hoy</b><span>{todaySchedule?.enabled?`${todaySchedule.day}: ${todaySchedule.openTime} – ${todaySchedule.closeTime}`:`${todaySchedule?.day??"Hoy"}: Cerrado`}</span></div><div>{settings.address&&<span>⌖ {settings.address}</span>}{settings.phone&&<a href={`tel:${settings.phone.replace(/\s/g,"")}`}>☎ {settings.phone}</a>}{settings.whatsapp&&<a href={`https://wa.me/${settings.whatsapp}`} target="_blank" rel="noreferrer">WhatsApp</a>}{settings.mapUrl&&<a href={settings.mapUrl} target="_blank" rel="noreferrer">Ver ubicación ↗</a>}</div></footer>
       {count > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}><span><b>{count}</b> Ver pedido</span><strong>{money(total)}</strong></button>}
       {cartOpen && <div className="drawer-back" onClick={() => setCartOpen(false)}><aside className="cart" onClick={(e) => e.stopPropagation()}><button className="close" onClick={() => setCartOpen(false)}>×</button><span className="eyebrow">SU PEDIDO</span><h2>Todo listo para ordenar</h2><p className="table-tag">📍 {location?.name ?? "Sin ubicación"}</p>
         <div className="cart-items">{cart.map((item) => <div key={item.id}><span>{item.icon}</span><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => changeQty(item.id, -1)}>−</button><b>{item.qty}</b><button onClick={() => changeQty(item.id, 1)}>＋</button></div></div>)}</div>
