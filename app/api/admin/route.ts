@@ -1,0 +1,34 @@
+import { NextRequest, NextResponse } from "next/server";
+import { adminData, saveLocation, saveProduct, updateOrderStatus } from "../../../db/service";
+import { isAdminRequest } from "../../../lib/admin-auth";
+
+export const dynamic = "force-dynamic";
+
+function unauthorized() {
+  return NextResponse.json({ error: "Acceso no autorizado." }, { status: 401 });
+}
+
+export async function GET() {
+  if (!(await isAdminRequest())) return unauthorized();
+  try {
+    return NextResponse.json(await adminData(), { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: "No fue posible cargar el panel." }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  if (!(await isAdminRequest())) return unauthorized();
+  try {
+    const body = await request.json() as { action: string; data: Record<string, unknown> };
+    if (body.action === "saveProduct") await saveProduct(body.data as never);
+    else if (body.action === "saveLocation") await saveLocation(body.data as never);
+    else if (body.action === "orderStatus") await updateOrderStatus(Number(body.data.id), String(body.data.status) as never);
+    else return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No fue posible guardar.";
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
