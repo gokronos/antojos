@@ -11,6 +11,7 @@ type OrderLine = { name:string; qty:number; unitPrice:number };
 type ActiveOrder = { id:string; status:string; total:number; table:string; name:string; itemCount:number; lines:OrderLine[]; paid:boolean; expiresAt:number };
 type Banner = { id:number; eyebrow:string; title:string; text:string; image:string; active:boolean };
 type Business = { name:string; slogan:string; logo:string; primary:string; accent:string; background:string; address:string; phone:string; whatsapp:string; mapUrl:string };
+type ScheduleDay = { day:string; open:string; close:string; enabled:boolean };
 
 const seed: Product[] = [
   { id: 1, name: "Burger de la casa", description: "Carne artesanal, queso, tocineta y salsa de la casa", price: 24900, category: "Hamburguesas", icon: "🍔", active: true },
@@ -32,6 +33,7 @@ export default function Home() {
   const [historyPeriod, setHistoryPeriod] = useState<"Día"|"Semana"|"Quincena"|"Mes">("Día");
   const [adminSection, setAdminSection] = useState<"orders"|"menu"|"history"|"locations"|"users"|"branding"|"settings">("orders");
   const [orderFilter, setOrderFilter] = useState("Activos");
+  const [statusFilterOpen,setStatusFilterOpen]=useState(false);
   const [locationFilter, setLocationFilter] = useState("Todas las ubicaciones");
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [categoryList, setCategoryList] = useState(["Hamburguesas","Perros","Para compartir","Bebidas"]);
@@ -72,13 +74,16 @@ export default function Home() {
   const [statusMenuId, setStatusMenuId] = useState<string | null>(null);
   const [productPhotos, setProductPhotos] = useState<Record<number,string[]>>({});
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
-  const [orderDetailOpen, setOrderDetailOpen] = useState(true);
+  const [orderDetailOpen, setOrderDetailOpen] = useState(false);
   const [finishedOrderId, setFinishedOrderId] = useState("");
   const [bannerIndex, setBannerIndex] = useState(0);
   const [business, setBusiness] = useState<Business>({name:"Mesa Lista",slogan:"Comida que provoca",logo:"",primary:"#173d2d",accent:"#c8ff45",background:"#f6f1e7",address:"Calle 10 # 5-24, Cúcuta",phone:"300 123 4567",whatsapp:"573001234567",mapUrl:"https://maps.google.com"});
   const [banners,setBanners]=useState<Banner[]>([
     {id:1,eyebrow:"BIENVENIDOS",title:"¿Qué se le antoja comer hoy?",text:"Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.",image:"",active:true},
     {id:2,eyebrow:"RECOMENDADO DE LA CASA",title:"Sabor que se disfruta sin afán",text:"Conozca nuestros productos favoritos y pida directamente desde su mesa.",image:"",active:true},
+  ]);
+  const [schedule,setSchedule]=useState<ScheduleDay[]>([
+    {day:"Lunes",open:"11:00",close:"22:00",enabled:true},{day:"Martes",open:"11:00",close:"22:00",enabled:true},{day:"Miércoles",open:"11:00",close:"22:00",enabled:true},{day:"Jueves",open:"11:00",close:"22:00",enabled:true},{day:"Viernes",open:"11:00",close:"23:30",enabled:true},{day:"Sábado",open:"12:00",close:"23:30",enabled:true},{day:"Domingo",open:"12:00",close:"21:00",enabled:true},
   ]);
   const statusFlow = ["Nuevo", "Aceptado", "En preparación", "Entregado"];
   const statusIcon:Record<string,string> = {"Nuevo":"●","Aceptado":"✓","En preparación":"◴","Entregado":"✓"};
@@ -97,8 +102,10 @@ export default function Home() {
     const savedOrder = window.localStorage.getItem("mesa-lista-active-order");
     const savedBusiness=window.localStorage.getItem("mesa-lista-business");
     const savedBanners=window.localStorage.getItem("mesa-lista-banners");
+    const savedSchedule=window.localStorage.getItem("mesa-lista-schedule");
     if(savedBusiness)setBusiness(JSON.parse(savedBusiness));
     if(savedBanners)setBanners(JSON.parse(savedBanners));
+    if(savedSchedule)setSchedule(JSON.parse(savedSchedule));
     if(savedOrder) {
       const parsed=JSON.parse(savedOrder) as ActiveOrder & {items?:string[]};
       if(parsed.expiresAt && parsed.expiresAt <= Date.now()) window.localStorage.removeItem("mesa-lista-active-order");
@@ -120,6 +127,7 @@ export default function Home() {
   },[activeOrder]);
   useEffect(()=>{window.localStorage.setItem("mesa-lista-business",JSON.stringify(business))},[business]);
   useEffect(()=>{window.localStorage.setItem("mesa-lista-banners",JSON.stringify(banners))},[banners]);
+  useEffect(()=>{window.localStorage.setItem("mesa-lista-schedule",JSON.stringify(schedule))},[schedule]);
   useEffect(()=>{
     const timer=window.setInterval(()=>setActiveOrder(current=>current && current.expiresAt<=Date.now()?null:current),30000);
     return()=>window.clearInterval(timer);
@@ -185,6 +193,10 @@ export default function Home() {
   const imageData=(file:File,done:(url:string)=>void)=>{const reader=new FileReader();reader.onload=()=>done(String(reader.result||""));reader.readAsDataURL(file)};
   const activeBanners=banners.filter(b=>b.active);
   const currentBanner=activeBanners[bannerIndex%Math.max(activeBanners.length,1)]||banners[0];
+  const dayIndex=(new Date().getDay()+6)%7;
+  const todaySchedule=schedule[dayIndex]||schedule[0];
+  const nowTime=new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Bogota"});
+  const isOpenNow=Boolean(todaySchedule?.enabled&&nowTime>=todaySchedule.open&&nowTime<todaySchedule.close);
   const themeStyle={"--green":business.primary,"--lime":business.accent,"--cream":business.background} as CSSProperties;
 
   if (mode === "admin") return (
@@ -211,7 +223,7 @@ export default function Home() {
           <article><span>Ticket promedio</span><strong>$27.016</strong><em>6 mesas activas</em></article>
         </div>
         {uniqueOrders.some(o=>o.modified)&&<div className="change-alert"><span>!</span><div><strong>{uniqueOrders.filter(o=>o.modified).length} pedido modificado</strong><p>El pedido original fue actualizado y aparece primero; no se creó una copia.</p></div><button onClick={()=>setOrders(xs=>xs.map(o=>({...o,modified:false})))}>Marcar como revisado</button></div>}
-        <div className="section-title order-title"><div><h2>Pedidos en vivo</h2><p>Un pedido por tarjeta; las modificaciones actualizan el original</p></div><div className="compact-filters"><label><span>Estado</span><select value={orderFilter} onChange={e=>setOrderFilter(e.target.value)}><option>Activos</option><option>Nuevo</option><option>Aceptado</option><option>En preparación</option><option>Entregado</option><option>Todos</option></select></label><label><span>Mesa o ubicación</span><select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)}><option>Todas las ubicaciones</option>{Array.from(new Set([...locations.map(l=>l.name),...uniqueOrders.map(o=>o.table)])).map(place=><option key={place}>{place}</option>)}</select></label><button className={modifiedOnly?"active":""} onClick={()=>setModifiedOnly(v=>!v)}><i>{modifiedOnly?"✓":"↻"}</i><span><b>Solo modificados</b><small>{uniqueOrders.filter(o=>o.modified).length} pendientes de revisión</small></span></button>{(orderFilter!=="Activos"||locationFilter!=="Todas las ubicaciones"||modifiedOnly)&&<button className="clear-filters" onClick={()=>{setOrderFilter("Activos");setLocationFilter("Todas las ubicaciones");setModifiedOnly(false)}}>Limpiar</button>}</div></div>
+        <div className="section-title order-title"><div><h2>Pedidos en vivo</h2><p>Un pedido por tarjeta; las modificaciones actualizan el original</p></div><div className="compact-filters"><div className="filter-status-wrap"><button className="visual-filter-trigger" onClick={()=>setStatusFilterOpen(v=>!v)}><i>{orderFilter==="Activos"?"◉":orderFilter==="Nuevo"?"●":orderFilter==="Aceptado"?"✓":orderFilter==="En preparación"?"◴":orderFilter==="Entregado"?"✓":"▦"}</i><span><small>Estado</small><b>{orderFilter}</b></span><em>⌄</em></button>{statusFilterOpen&&<div className="filter-status-menu"><strong>Filtrar pedidos</strong>{["Activos","Nuevo","Aceptado","En preparación","Entregado","Todos"].map(status=><button className={orderFilter===status?"selected":""} key={status} onClick={()=>{setOrderFilter(status);setStatusFilterOpen(false)}}><i>{status==="Activos"?"◉":status==="Nuevo"?"●":status==="Aceptado"?"✓":status==="En preparación"?"◴":status==="Entregado"?"✓":"▦"}</i><span><b>{status}</b><small>{status==="Activos"?"Pedidos pendientes de entrega":status==="Nuevo"?"Recién recibidos":status==="Aceptado"?"Confirmados por el local":status==="En preparación"?"Actualmente en cocina":status==="Entregado"?"Ya entregados":"Todos los pedidos"}</small></span>{orderFilter===status&&<em>✓</em>}</button>)}</div>}</div><label><span>Mesa o ubicación</span><select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)}><option>Todas las ubicaciones</option>{Array.from(new Set([...locations.map(l=>l.name),...uniqueOrders.map(o=>o.table)])).map(place=><option key={place}>{place}</option>)}</select></label><button className={modifiedOnly?"active":""} onClick={()=>setModifiedOnly(v=>!v)}><i>{modifiedOnly?"✓":"↻"}</i><span><b>Solo modificados</b><small>{uniqueOrders.filter(o=>o.modified).length} pendientes de revisión</small></span></button>{(orderFilter!=="Activos"||locationFilter!=="Todas las ubicaciones"||modifiedOnly)&&<button className="clear-filters" onClick={()=>{setOrderFilter("Activos");setLocationFilter("Todas las ubicaciones");setModifiedOnly(false)}}>Limpiar</button>}</div></div>
         <div className="orders">
           {filteredOrders.map((o, i) => <article className={`order ${i === 0 && o.status==="Nuevo" ? "urgent" : ""}`} key={o.id}>
             <div className="order-main"><div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong>{o.modified&&<b className="modified-badge">Modificado</b>}</div><small>{o.ago}</small></div><h3>{o.name}</h3><div className="order-lines"><div className="line-head"><span>Producto</span><span>Precio</span><span>Subtotal</span></div>{o.lines.map((line,index)=><div className="line-row" key={`${line.name}-${index}`}><span><b>{line.qty}×</b> {line.name}</span><span>{money(line.unitPrice)}</span><strong>{money(line.qty*line.unitPrice)}</strong></div>)}</div>{o.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{o.updateNote}</span></div>}</div>
@@ -251,6 +263,7 @@ export default function Home() {
             </article>
             <article className="brand-form"><h3>Datos de contacto</h3><label>Dirección<input value={business.address} onChange={e=>setBusiness(x=>({...x,address:e.target.value}))}/></label><div className="form-row"><label>Teléfono<input value={business.phone} onChange={e=>setBusiness(x=>({...x,phone:e.target.value}))}/></label><label>WhatsApp<input value={business.whatsapp} onChange={e=>setBusiness(x=>({...x,whatsapp:e.target.value.replace(/\D/g,"")}))}/></label></div><label>Enlace de ubicación en el mapa<input value={business.mapUrl} onChange={e=>setBusiness(x=>({...x,mapUrl:e.target.value}))} placeholder="https://maps.google.com/..."/></label><div className="contact-preview"><b>Así aparecerá en el menú</b><span>⌖ {business.address||"Sin dirección"}</span><span>☎ {business.phone||"Sin teléfono"}</span><span>WhatsApp {business.whatsapp||"Sin número"}</span></div></article>
           </div>
+          <article className="schedule-editor"><div className="schedule-heading"><div><span>◷</span><div><h3>Horario de atención</h3><p>Defina los días y horas en que el local recibe pedidos.</p></div></div><b className={isOpenNow?"open":"closed"}>{isOpenNow?"Abierto ahora":"Cerrado ahora"}</b></div><div className="schedule-days">{schedule.map((item,index)=><div className={`schedule-row ${!item.enabled?"disabled":""}`} key={item.day}><label className="day-toggle"><input type="checkbox" checked={item.enabled} onChange={()=>setSchedule(xs=>xs.map((x,i)=>i===index?{...x,enabled:!x.enabled}:x))}/><span>{item.enabled?"✓":""}</span><b>{item.day}</b></label>{item.enabled?<><label>Apertura<input type="time" value={item.open} onChange={e=>setSchedule(xs=>xs.map((x,i)=>i===index?{...x,open:e.target.value}:x))}/></label><i>hasta</i><label>Cierre<input type="time" value={item.close} onChange={e=>setSchedule(xs=>xs.map((x,i)=>i===index?{...x,close:e.target.value}:x))}/></label></>:<em>Cerrado todo el día</em>}</div>)}</div></article>
           <div className="banner-admin-head"><div><h2>Banners del menú</h2><p>Puede publicar varios mensajes con su propio texto e imagen.</p></div><button onClick={()=>setBanners(xs=>[...xs,{id:Date.now(),eyebrow:"NUEVO MENSAJE",title:"Título del banner",text:"Escriba aquí la información que desea mostrar.",image:"",active:true}])}>＋ Agregar banner</button></div>
           <div className="banner-admin-list">{banners.map((banner,i)=><article className="banner-editor" key={banner.id}><div className="banner-number"><span>{String(i+1).padStart(2,"0")}</span><label className="switch"><input type="checkbox" checked={banner.active} onChange={()=>setBanners(xs=>xs.map(x=>x.id===banner.id?{...x,active:!x.active}:x))}/><span/></label></div><div className="banner-image">{banner.image?<img src={banner.image} alt={`Banner ${i+1}`}/>:<span>Imagen del banner</span>}<label>Subir imagen<input type="file" accept="image/*" onChange={e=>{const file=e.target.files?.[0];if(file)imageData(file,url=>setBanners(xs=>xs.map(x=>x.id===banner.id?{...x,image:url}:x)))}}/></label></div><div className="banner-fields"><label>Texto superior<input value={banner.eyebrow} onChange={e=>setBanners(xs=>xs.map(x=>x.id===banner.id?{...x,eyebrow:e.target.value}:x))}/></label><label>Título<input value={banner.title} onChange={e=>setBanners(xs=>xs.map(x=>x.id===banner.id?{...x,title:e.target.value}:x))}/></label><label>Descripción<textarea value={banner.text} onChange={e=>setBanners(xs=>xs.map(x=>x.id===banner.id?{...x,text:e.target.value}:x))}/></label></div><button className="banner-delete" disabled={banners.length===1} onClick={()=>setBanners(xs=>xs.filter(x=>x.id!==banner.id))}>Eliminar</button></article>)}</div>
         </section>}
@@ -267,7 +280,7 @@ export default function Home() {
 
   return (
     <main className="customer" style={themeStyle}>
-      <header className="menu-head"><div className="brand light customer-brand">{business.logo?<img src={business.logo} alt={business.name}/>:<span>{business.name.slice(0,2).toUpperCase()}</span>}<div>{business.name}<small>{business.slogan}</small></div></div><button onClick={openAdmin} className="admin-link">Ingreso del personal</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
+      <header className="menu-head"><div className="brand light customer-brand">{business.logo?<img src={business.logo} alt={business.name}/>:<span>{business.name.slice(0,2).toUpperCase()}</span>}<div>{business.name}<small>{business.slogan}</small></div></div><div className={`menu-open-status ${isOpenNow?"open":"closed"}`}><i/><span><b>{isOpenNow?"Abierto ahora":"Cerrado ahora"}</b><small>{todaySchedule?.day} · {todaySchedule?.enabled?`${todaySchedule.open} – ${todaySchedule.close}`:"No hay atención"}</small></span></div><button onClick={openAdmin} className="admin-link">Ingreso del personal</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
       <section className={`hero ${currentBanner?.image?"has-banner-image":""}`} style={currentBanner?.image?{backgroundImage:`linear-gradient(90deg, ${business.primary}f2 0%, ${business.primary}c9 48%, ${business.primary}33 100%), url(${currentBanner.image})`}:undefined}>
         <div><span className="eyebrow">{currentBanner?.eyebrow||"BIENVENIDOS"} · {table.toUpperCase()}</span><h1>{currentBanner?.title||"¿Qué se le antoja comer hoy?"}</h1><p>{currentBanner?.text}</p>{activeBanners.length>1&&<div className="banner-controls"><button onClick={()=>setBannerIndex(i=>(i-1+activeBanners.length)%activeBanners.length)}>←</button><span>{activeBanners.map((_,i)=><i className={i===bannerIndex%activeBanners.length?"active":""} key={i}/>)}</span><button onClick={()=>setBannerIndex(i=>(i+1)%activeBanners.length)}>→</button></div>}</div>
         {!currentBanner?.image&&<div className="hero-dish"><span>🍔</span><i>100%<br/><small>artesanal</small></i></div>}
@@ -279,7 +292,7 @@ export default function Home() {
         <div className="chips">{categories.map(c=><button className={category===c?"active":""} onClick={()=>setCategory(c)} key={c}>{c}</button>)}</div>
         <div className="food-grid">{visible.map(p=><article className="food-card" key={p.id}><div className={`food-art art-${p.id%4}`}>{productPhotos[p.id]?.[0]?<img src={productPhotos[p.id][0]} alt={p.name}/>:<span>{p.icon}</span>}{p.id===1&&<b>Favorito</b>}</div><div className="food-copy"><div><h3>{p.name}</h3><p>{p.description}</p></div><footer><strong>{money(p.price)}</strong><button onClick={()=>add(p)} aria-label={`Agregar ${p.name}`}>＋</button></footer></div></article>)}</div>
       </section>
-      <footer className="business-footer"><div className="brand light">{business.logo?<img src={business.logo} alt={business.name}/>:<span>{business.name.slice(0,2).toUpperCase()}</span>}<div>{business.name}<small>{business.slogan}</small></div></div><div><span>⌖ {business.address}</span><a href={`tel:${business.phone.replace(/\s/g,"")}`}>☎ {business.phone}</a><a href={`https://wa.me/${business.whatsapp}`} target="_blank" rel="noreferrer">WhatsApp</a>{business.mapUrl&&<a href={business.mapUrl} target="_blank" rel="noreferrer">Ver ubicación ↗</a>}</div></footer>
+      <footer className="business-footer"><div className="brand light">{business.logo?<img src={business.logo} alt={business.name}/>:<span>{business.name.slice(0,2).toUpperCase()}</span>}<div>{business.name}<small>{business.slogan}</small></div></div><div className="footer-hours"><b>Horario de hoy</b><span>{todaySchedule?.enabled?`${todaySchedule.day}: ${todaySchedule.open} – ${todaySchedule.close}`:`${todaySchedule?.day}: Cerrado`}</span></div><div><span>⌖ {business.address}</span><a href={`tel:${business.phone.replace(/\s/g,"")}`}>☎ {business.phone}</a><a href={`https://wa.me/${business.whatsapp}`} target="_blank" rel="noreferrer">WhatsApp</a>{business.mapUrl&&<a href={business.mapUrl} target="_blank" rel="noreferrer">Ver ubicación ↗</a>}</div></footer>
       {count>0 && <button className="floating-cart" onClick={()=>setCartOpen(true)}><span><b>{count}</b> Ver pedido</span><strong>{money(total)}</strong></button>}
       {cartOpen && <div className="drawer-back" onClick={()=>setCartOpen(false)}><aside className="cart" onClick={e=>e.stopPropagation()}><button className="close" onClick={()=>setCartOpen(false)}>×</button><span className="eyebrow">SU PEDIDO</span><h2>Todo listo para ordenar</h2><p className="table-tag">📍 {table}</p>
         <div className="cart-items">{cart.map(x=><div key={x.id}><span>{x.icon}</span><div><strong>{x.name}</strong><small>{money(x.price)}</small></div><div className="qty"><button onClick={()=>changeQty(x.id,-1)}>−</button><b>{x.qty}</b><button onClick={()=>changeQty(x.id,1)}>＋</button></div></div>)}</div>
