@@ -25,6 +25,11 @@ export default function Home() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [historyPeriod, setHistoryPeriod] = useState<"Día"|"Semana"|"Quincena"|"Mes">("Día");
+  const [adminSection, setAdminSection] = useState<"orders"|"menu"|"history"|"locations"|"users"|"settings">("orders");
+  const [orderFilter, setOrderFilter] = useState("Activos");
+  const [categoryList, setCategoryList] = useState(["Hamburguesas","Perros","Para compartir","Bebidas"]);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [newCategory, setNewCategory] = useState("");
   const [userEdit, setUserEdit] = useState<{id:number;name:string;username:string;role:string}|null>(null);
   const [users, setUsers] = useState([
     {id:1,name:"Andrea Martínez",username:"andrea",role:"Propietaria",active:true},
@@ -73,7 +78,7 @@ export default function Home() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
-  const categories = ["Todos", ...Array.from(new Set(products.map(p => p.category)))];
+  const categories = ["Todos", ...categoryList];
   const visible = products.filter(p => p.active && (category === "Todos" || p.category === category) && p.name.toLowerCase().includes(search.toLowerCase()));
   const total = cart.reduce((s, p) => s + p.price * p.qty, 0);
   const count = cart.reduce((s, p) => s + p.qty, 0);
@@ -87,11 +92,8 @@ export default function Home() {
     setOrders(o => [{ id: String(1049 + o.length), table, name, total, status: "Nuevo", ago: "Ahora" }, ...o]);
     setCheckout(false); setSuccess(true); setCart([]);
   };
-  const advanceStatus = (id:string) => setOrders(xs=>xs.map(o=>{
-    if(o.id!==id)return o;
-    const current=statusFlow.indexOf(o.status);
-    return {...o,status:statusFlow[Math.min(current+1,statusFlow.length-1)]};
-  }));
+  const setOrderStatus = (id:string,status:string) => setOrders(xs=>xs.map(o=>o.id===id?{...o,status}:o));
+  const filteredOrders = orders.filter(o=>orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter);
   const openAdmin = () => authenticated ? setMode("admin") : setLoginOpen(true);
   const signIn = () => {
     if(!loginUser.trim() || !loginPassword.trim())return;
@@ -103,42 +105,45 @@ export default function Home() {
       <aside className="sidebar">
         <div className="brand"><span>ML</span><div>Mesa Lista<small>Panel del local</small></div></div>
         <nav>
-          <button className="active">▦ <span>Pedidos</span><b>2</b></button>
-          <button onClick={() => document.getElementById("products")?.scrollIntoView()}>◫ <span>Productos</span></button>
-          <button onClick={() => document.getElementById("locations")?.scrollIntoView()}>⌁ <span>Mesas y barra</span></button>
-          <button onClick={() => document.getElementById("history")?.scrollIntoView()}>◷ <span>Historial</span></button>
-          <button onClick={() => document.getElementById("users")?.scrollIntoView()}>♙ <span>Usuarios</span></button>
+          <button className={adminSection==="orders"?"active":""} onClick={()=>setAdminSection("orders")}>▦ <span>Pedidos</span><b>2</b></button>
+          <button className={adminSection==="menu"?"active":""} onClick={()=>setAdminSection("menu")}>◫ <span>Menú y productos</span></button>
+          <button className={adminSection==="history"?"active":""} onClick={()=>setAdminSection("history")}>◷ <span>Historial</span></button>
+          <button className={adminSection==="locations"?"active":""} onClick={()=>setAdminSection("locations")}>⌁ <span>Mesas y barra</span></button>
+          <button className={adminSection==="users"?"active":""} onClick={()=>setAdminSection("users")}>♙ <span>Usuarios</span></button>
+          <button className={adminSection==="settings"?"active":""} onClick={()=>setAdminSection("settings")}>⚙ <span>Configuración</span></button>
         </nav>
         <button className="view-menu" onClick={() => setMode("menu")}>Ver menú del cliente ↗</button>
         <button className="logout" onClick={()=>{setAuthenticated(false);setMode("menu")}}>Cerrar sesión</button>
       </aside>
       <section className="admin-main">
-        <header className="admin-top"><div><p>Domingo, 26 de julio</p><h1>Buenas tardes, Andrea</h1></div><div className="open-pill"><i/> Local abierto</div></header>
-        <div className="stats">
+        <header className="admin-top"><div><p>Domingo, 26 de julio</p><h1>{adminSection==="orders"?"Pedidos":adminSection==="menu"?"Menú y productos":adminSection==="history"?"Historial de ventas":adminSection==="locations"?"Mesas y barra":adminSection==="users"?"Usuarios administradores":"Configuración"}</h1></div><div className="open-pill"><i/> Local abierto</div></header>
+        {adminSection==="orders" && <><div className="stats">
           <article><span>Pedidos hoy</span><strong>18</strong><em>↑ 12% frente a ayer</em></article>
           <article><span>Ventas hoy</span><strong>$486.300</strong><em>↑ 8% frente a ayer</em></article>
           <article><span>Ticket promedio</span><strong>$27.016</strong><em>6 mesas activas</em></article>
         </div>
-        <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Se actualizan automáticamente</p></div><button>＋ Nuevo pedido</button></div>
+        <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Seleccione el estado; ningún cambio se hará accidentalmente</p></div><div className="order-filters">{["Activos","Nuevo","Aceptado","En preparación","Listo","Entregado","Todos"].map(f=><button className={orderFilter===f?"active":""} onClick={()=>setOrderFilter(f)} key={f}>{f}</button>)}</div></div>
         <div className="orders">
-          {orders.map((o, i) => <article className={`order ${i === 0 ? "urgent" : ""}`} key={o.id}>
+          {filteredOrders.map((o, i) => <article className={`order ${i === 0 && o.status==="Nuevo" ? "urgent" : ""}`} key={o.id}>
             <div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong></div><small>{o.ago}</small></div>
             <h3>{o.name}</h3><p>{i === 0 ? "1 Burger de la casa · 2 Cerveza fría" : i === 1 ? "2 Perros especiales · 1 Limonada" : "1 Papas explosivas · 1 Cerveza"}</p>
-            <div className="order-foot"><strong>{money(o.total)}</strong><button onClick={()=>advanceStatus(o.id)} className={`status status-${statusFlow.indexOf(o.status)}`}>{o.status}<small> →</small></button></div>
+            <div className="order-foot"><strong>{money(o.total)}</strong><label className={`status-select status-${statusFlow.indexOf(o.status)}`}><span>Estado</span><select value={o.status} onChange={e=>setOrderStatus(o.id,e.target.value)}>{statusFlow.map(s=><option key={s}>{s}</option>)}</select></label></div>
           </article>)}
-        </div>
-        <section id="history">
+          {!filteredOrders.length&&<div className="empty-state">No hay pedidos con este estado.</div>}
+        </div></>}
+        {adminSection==="history" && <section>
           <div className="section-title products-title"><div><h2>Historial de ventas</h2><p>Consulte el rendimiento del local por período</p></div><div className="period-tabs">{(["Día","Semana","Quincena","Mes"] as const).map(p=><button className={historyPeriod===p?"active":""} onClick={()=>setHistoryPeriod(p)} key={p}>{p}</button>)}</div></div>
           <div className="history-summary"><article><span>Ventas del período</span><strong>{money(periodTotals[historyPeriod].sales)}</strong></article><article><span>Pedidos entregados</span><strong>{periodTotals[historyPeriod].orders}</strong></article><article><span>Ticket promedio</span><strong>{money(periodTotals[historyPeriod].average)}</strong></article></div>
           <div className="history-table"><div className="history-head"><span>Fecha y hora</span><span>Pedido</span><span>Cliente / ubicación</span><span>Total</span><span>Estado</span></div>{historyRows.map(r=><div className="history-row" key={r.id}><span>{r.date}</span><b>#{r.id}</b><span><strong>{r.name}</strong><small>{r.place}</small></span><b>{money(r.total)}</b><em>✓ {r.status}</em></div>)}</div>
-        </section>
-        <div className="section-title products-title" id="products"><div><h2>Productos</h2><p>{products.filter(p=>p.active).length} disponibles en el menú</p></div><button onClick={() => {
+        </section>}
+        {adminSection==="menu" && <section><div className="category-strip"><div><strong>Categorías del menú</strong><span>{categoryList.join(" · ")}</span></div><button onClick={()=>setCategoryOpen(true)}>＋ Crear categoría</button></div>
+        <div className="section-title products-title"><div><h2>Productos</h2><p>{products.filter(p=>p.active).length} disponibles en {categoryList.length} categorías</p></div><button onClick={() => {
           const id = Date.now(); setProducts(p => [...p, {id,name:"Nuevo producto",description:"Edite la descripción",price:10000,category:"Hamburguesas",icon:"🍽️",active:true}]); setEditId(id);
         }}>＋ Agregar producto</button></div>
         <div className="product-table">
           {products.map(p => <div className="product-row" key={p.id}><span className="mini-food">{p.icon}</span><div><strong>{p.name}</strong><small>{p.category}</small></div><b>{money(p.price)}</b><label className="switch"><input type="checkbox" checked={p.active} onChange={() => setProducts(xs => xs.map(x => x.id===p.id?{...x,active:!x.active}:x))}/><span/></label><button className="edit" onClick={()=>setEditId(p.id)}>Editar</button></div>)}
-        </div>
-        <div className="section-title products-title" id="locations"><div><h2>Mesas, barra y puntos de entrega</h2><p>Cree todos los lugares donde sus clientes pueden pedir</p></div><button onClick={() => setLocationEdit({id:Date.now(),name:"",type:"Mesa",active:true})}>＋ Crear ubicación</button></div>
+        </div></section>}
+        {adminSection==="locations" && <section><div className="section-title products-title"><div><h2>Mesas, barra y puntos de entrega</h2><p>Cree todos los lugares donde sus clientes pueden pedir</p></div><button onClick={() => setLocationEdit({id:Date.now(),name:"",type:"Mesa",active:true})}>＋ Crear ubicación</button></div>
         <div className="location-grid">
           {locations.map(l => <article className="location-card" key={l.id}>
             <div className={`location-icon ${l.type.toLowerCase()}`}>{l.type === "Mesa" ? "▦" : l.type === "Barra" ? "▰" : "⌂"}</div>
@@ -146,17 +151,18 @@ export default function Home() {
             <label className="switch"><input type="checkbox" checked={l.active} onChange={() => setLocations(xs=>xs.map(x=>x.id===l.id?{...x,active:!x.active}:x))}/><span/></label>
             <button className="edit" onClick={()=>setLocationEdit({...l})}>Editar</button>
           </article>)}
-        </div>
-        <div className="install-card"><div><span>📲</span><div><strong>Aplicación para el teléfono del local</strong><p>Instálela en Android y ábrala desde la pantalla de inicio, sin computador.</p></div></div><button disabled={!installPrompt} onClick={async()=>{if(installPrompt){await installPrompt.prompt();setInstallPrompt(null)}}}>{installPrompt ? "Instalar aplicación" : "Lista para instalar"}</button></div>
-        <section id="users"><div className="section-title products-title"><div><h2>Usuarios administradores</h2><p>Controle quién puede ver ventas, pedidos y configuración</p></div><button onClick={()=>setUserEdit({id:Date.now(),name:"",username:"",role:"Administrador"})}>＋ Crear usuario</button></div>
+        </div></section>}
+        {adminSection==="users" && <section><div className="section-title products-title"><div><h2>Usuarios administradores</h2><p>Controle quién puede ver ventas, pedidos y configuración</p></div><button onClick={()=>setUserEdit({id:Date.now(),name:"",username:"",role:"Administrador"})}>＋ Crear usuario</button></div>
           <div className="user-list">{users.map(u=><article key={u.id}><span className="avatar">{u.name.split(" ").map(x=>x[0]).slice(0,2).join("")}</span><div><strong>{u.name}</strong><small>@{u.username} · {u.role}</small></div><i>{u.active?"Activo":"Inactivo"}</i><button className="edit" onClick={()=>setUserEdit({...u})}>Editar</button></article>)}</div>
-        </section>
+        </section>}
+        {adminSection==="settings" && <section><div className="settings-card"><span>📲</span><div><h2>Aplicación del local</h2><p>Instálela en Android y ábrala desde la pantalla de inicio, sin computador.</p></div><button disabled={!installPrompt} onClick={async()=>{if(installPrompt){await installPrompt.prompt();setInstallPrompt(null)}}}>{installPrompt ? "Instalar aplicación" : "Lista para instalar"}</button></div><div className="settings-card"><span>🔔</span><div><h2>Alertas por WhatsApp</h2><p>Conecte el número empresarial para recibir una alerta con cada nuevo pedido.</p></div><button>Configurar</button></div></section>}
       </section>
       {editId !== null && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();setEditId(null)}}><button type="button" className="close" onClick={()=>setEditId(null)}>×</button><h2>Editar producto</h2><p>Los cambios aparecerán de inmediato en el menú.</p>
         {(() => { const p=products.find(x=>x.id===editId); if(!p)return null; return <><label>Nombre<input value={p.name} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,name:e.target.value}:x))}/></label><label>Descripción<textarea value={p.description} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,description:e.target.value}:x))}/></label><div className="form-row"><label>Precio<input type="number" value={p.price} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,price:Number(e.target.value)}:x))}/></label><label>Categoría<select value={p.category} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,category:e.target.value}:x))}>{categories.slice(1).map(c=><option key={c}>{c}</option>)}</select></label></div><button className="save">Guardar cambios</button></> })()}
       </form></div>}
       {locationEdit && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!locationEdit.name.trim())return;setLocations(xs=>xs.some(x=>x.id===locationEdit.id)?xs.map(x=>x.id===locationEdit.id?locationEdit:x):[...xs,locationEdit]);setLocationEdit(null)}}><button type="button" className="close" onClick={()=>setLocationEdit(null)}>×</button><h2>{locations.some(x=>x.id===locationEdit.id)?"Editar ubicación":"Crear ubicación"}</h2><p>Puede agregar mesas, puestos en la barra o cualquier otro punto de entrega.</p><label>Nombre<input autoFocus value={locationEdit.name} onChange={e=>setLocationEdit({...locationEdit,name:e.target.value})} placeholder="Ej. Barra 03"/></label><label>Tipo<select value={locationEdit.type} onChange={e=>setLocationEdit({...locationEdit,type:e.target.value as Location["type"]})}><option>Mesa</option><option>Barra</option><option>Otro</option></select></label><button className="save">Guardar ubicación</button>{locations.some(x=>x.id===locationEdit.id)&&<button type="button" className="delete-location" onClick={()=>{setLocations(xs=>xs.filter(x=>x.id!==locationEdit.id));setLocationEdit(null)}}>Eliminar ubicación</button>}</form></div>}
       {userEdit && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!userEdit.name.trim()||!userEdit.username.trim())return;setUsers(xs=>xs.some(x=>x.id===userEdit.id)?xs.map(x=>x.id===userEdit.id?{...x,...userEdit}:x):[...xs,{...userEdit,active:true}]);setUserEdit(null)}}><button type="button" className="close" onClick={()=>setUserEdit(null)}>×</button><h2>{users.some(x=>x.id===userEdit.id)?"Editar usuario":"Crear usuario"}</h2><p>Esta persona podrá ingresar al panel privado del local.</p><label>Nombre completo<input value={userEdit.name} onChange={e=>setUserEdit({...userEdit,name:e.target.value})} placeholder="Ej. María Gómez"/></label><label>Usuario<input value={userEdit.username} onChange={e=>setUserEdit({...userEdit,username:e.target.value.replace(/\s/g,"").toLowerCase()})} placeholder="maria"/></label><label>Rol<select value={userEdit.role} onChange={e=>setUserEdit({...userEdit,role:e.target.value})}><option>Administrador</option><option>Operador de pedidos</option></select></label><label>Contraseña temporal<input type="password" placeholder="Mínimo 8 caracteres"/></label><button className="save">Guardar usuario</button></form></div>}
+      {categoryOpen && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!newCategory.trim())return;setCategoryList(xs=>xs.includes(newCategory.trim())?xs:[...xs,newCategory.trim()]);setNewCategory("");setCategoryOpen(false)}}><button type="button" className="close" onClick={()=>setCategoryOpen(false)}>×</button><h2>Crear categoría</h2><p>La categoría aparecerá inmediatamente al agregar o editar productos.</p><label>Nombre de la categoría<input autoFocus value={newCategory} onChange={e=>setNewCategory(e.target.value)} placeholder="Ej. Comida china"/></label><button className="save">Crear categoría</button></form></div>}
     </main>
   );
 
