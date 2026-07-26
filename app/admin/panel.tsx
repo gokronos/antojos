@@ -6,8 +6,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
-type OrderStatus = "Nuevo" | "Preparando" | "Listo" | "Entregado" | "Cancelado";
-type Order = { id: number; locationName: string; customerName: string; notes: string; total: number; status: OrderStatus; createdAt: string; items: { productId: number; productName: string; quantity: number }[] };
+type OrderStatus = "Nuevo" | "Aceptado" | "En preparación" | "Entregado" | "Cancelado";
+type Order = { id: number; locationName: string; customerName: string; notes: string; total: number; status: OrderStatus; paid:boolean; modified:boolean; updateNote:string; customerClosed:boolean; createdAt: string; updatedAt:string; items: { productId: number; productName: string; unitPrice:number; quantity: number }[] };
 type Settings = { name: string; tagline: string; welcomeMessage: string; currency: string; acceptingOrders: boolean; logo: string; primaryColor: string; accentColor: string; backgroundColor: string; address: string; phone: string; whatsapp: string; mapUrl: string };
 type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
@@ -18,7 +18,7 @@ type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
 const money = (value: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(value);
-const statuses: OrderStatus[] = ["Nuevo", "Preparando", "Listo", "Entregado", "Cancelado"];
+const statuses: OrderStatus[] = ["Nuevo", "Aceptado", "En preparación", "Entregado", "Cancelado"];
 const ago = (date: string) => {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   if (minutes < 1) return "Ahora";
@@ -62,6 +62,9 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDay[]>([]);
   const [saving, setSaving] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
+  const [orderFilter,setOrderFilter]=useState<"Activos"|OrderStatus|"Todos">("Activos");
+  const [locationFilter,setLocationFilter]=useState("Todas");
+  const [modifiedOnly,setModifiedOnly]=useState(false);
 
   const load = useCallback(async (quiet = false) => {
     try {
@@ -115,6 +118,11 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
 
   const activeOrders = useMemo(() => data?.orders.filter((order) => !["Entregado", "Cancelado"].includes(order.status)) ?? [], [data]);
   const history = useMemo(() => data?.orders.filter((order) => ["Entregado", "Cancelado"].includes(order.status)) ?? [], [data]);
+  const filteredOrders=useMemo(()=>data?.orders
+    .filter(order=>orderFilter==="Todos"||(orderFilter==="Activos"?!["Entregado","Cancelado"].includes(order.status):order.status===orderFilter))
+    .filter(order=>locationFilter==="Todas"||order.locationName===locationFilter)
+    .filter(order=>!modifiedOnly||order.modified)
+    .sort((a,b)=>Number(b.modified)-Number(a.modified))??[],[data,orderFilter,locationFilter,modifiedOnly]);
   const date = new Intl.DateTimeFormat("es-CO", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
   const newManualOrder = (): ManualOrder => ({
     customerName: "",
@@ -155,10 +163,12 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
             <article><span>Ventas hoy</span><strong>{money(data.stats.sales)}</strong><em>Pedidos no cancelados</em></article>
             <article><span>Ticket promedio</span><strong>{money(data.stats.average)}</strong><em>{data.locations.filter((location) => location.active).length} ubicaciones disponibles</em></article>
           </div>
+          {(data.orders.some(order=>order.modified))&&<div className="change-alert"><span>!</span><div><strong>{data.orders.filter(order=>order.modified).length} pedido(s) modificado(s)</strong><p>El cliente agregó productos o cambió su ubicación. El pedido original fue actualizado.</p></div></div>}
           <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Se actualizan automáticamente cada 10 segundos</p></div><button onClick={() => setManualOrder(newManualOrder())}>＋ Nuevo pedido</button></div>
-          <div className="orders">{activeOrders.length === 0
+          <div className="order-filters"><label>Estado<select value={orderFilter} onChange={e=>setOrderFilter(e.target.value as typeof orderFilter)}><option>Activos</option>{statuses.map(status=><option key={status}>{status}</option>)}<option>Todos</option></select></label><label>Ubicación<select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)}><option>Todas</option>{Array.from(new Set(data.orders.map(order=>order.locationName))).map(location=><option key={location}>{location}</option>)}</select></label><button className={modifiedOnly?"active":""} onClick={()=>setModifiedOnly(value=>!value)}>↻ Solo modificados ({data.orders.filter(order=>order.modified).length})</button>{(orderFilter!=="Activos"||locationFilter!=="Todas"||modifiedOnly)&&<button onClick={()=>{setOrderFilter("Activos");setLocationFilter("Todas");setModifiedOnly(false)}}>Limpiar filtros</button>}</div>
+          <div className="orders">{filteredOrders.length === 0
             ? <div className="empty-state">Todavía no hay pedidos activos.<button onClick={() => setManualOrder(newManualOrder())}>Crear pedido manual</button></div>
-            : activeOrders.map((order) => <OrderCard order={order} saving={saving} onStatus={(status) => action("orderStatus", { id: order.id, status })} key={order.id} />)}
+            : filteredOrders.map((order) => <OrderCard order={order} saving={saving} onStatus={(status) => action("orderStatus", { id: order.id, status })} onPaid={(paid)=>action("orderPaid",{id:order.id,paid})} onAcknowledge={()=>action("acknowledgeOrder",{id:order.id})} key={order.id} />)}
           </div>
         </>}
 
@@ -231,13 +241,14 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   </main>;
 }
 
-function OrderCard({ order, saving, onStatus }: { order: Order; saving: boolean; onStatus: (status: OrderStatus) => void }) {
-  return <article className={`order ${order.status === "Nuevo" ? "urgent" : ""}`}>
-    <div className="order-head"><div><span>#{order.id}</span><strong>{order.locationName}</strong></div><small>{ago(order.createdAt)}</small></div>
+function OrderCard({ order, saving, onStatus,onPaid,onAcknowledge }: { order: Order; saving: boolean; onStatus: (status: OrderStatus) => void; onPaid:(paid:boolean)=>void; onAcknowledge:()=>void }) {
+  return <article className={`order ${order.status === "Nuevo" ? "urgent" : ""} ${order.modified?"modified-order":""}`}>
+    <div className="order-head"><div><span>#{order.id}</span><strong>{order.locationName}</strong>{order.modified&&<b className="modified-badge">MODIFICADO</b>}</div><small>{ago(order.updatedAt||order.createdAt)}</small></div>
     <h3>{order.customerName}</h3>
-    <p>{order.items.map((item) => `${item.quantity} ${item.productName}`).join(" · ")}</p>
+    <div className="order-lines">{order.items.map((item,index)=><div className="order-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}</span><span>{money(item.unitPrice)}</span><strong>{money(item.unitPrice*item.quantity)}</strong></div>)}</div>
     {order.notes && <small className="order-note">Nota: {order.notes}</small>}
-    <div className="order-foot"><strong>{money(order.total)}</strong><select className={`status ${order.status.toLowerCase()}`} value={order.status} disabled={saving} onChange={(event) => onStatus(event.target.value as OrderStatus)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>
+    {order.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{order.updateNote}</span><button disabled={saving} onClick={onAcknowledge}>Marcar revisado</button></div>}
+    <div className="order-foot"><div><small>Total para cobrar</small><strong>{money(order.total)}</strong></div><button className={`paid-button ${order.paid?"paid":""}`} disabled={saving} onClick={()=>onPaid(!order.paid)}>{order.paid?"✓ Cobrado":"Marcar cobrado"}</button><select className={`status status-${statuses.indexOf(order.status)}`} value={order.status} disabled={saving} onChange={(event) => onStatus(event.target.value as OrderStatus)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>
   </article>;
 }
 

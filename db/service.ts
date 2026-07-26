@@ -18,7 +18,7 @@ export type LocationRecord = {
   active: boolean;
 };
 
-export type OrderStatus = "Nuevo" | "Preparando" | "Listo" | "Entregado" | "Cancelado";
+export type OrderStatus = "Nuevo" | "Aceptado" | "En preparación" | "Entregado" | "Cancelado";
 
 export type RestaurantSettings = {
   name: string;
@@ -94,6 +94,13 @@ export async function ensureDatabase() {
         status TEXT NOT NULL DEFAULT 'Nuevo',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS modified BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS update_note TEXT NOT NULL DEFAULT ''`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_token TEXT`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_closed BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_customer_token ON orders(customer_token) WHERE customer_token IS NOT NULL`;
+      await sql`UPDATE orders SET status='En preparación' WHERE status IN ('Preparando','Listo')`;
       await sql`CREATE TABLE IF NOT EXISTS order_items (
         id BIGSERIAL PRIMARY KEY, order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         product_id BIGINT NOT NULL, product_name TEXT NOT NULL,
@@ -185,6 +192,7 @@ export async function createOrder(input: {
   notes?: string;
   locationId: number;
   items: { productId: number; quantity: number }[];
+  customerToken?: string;
 }) {
   await ensureDatabase();
   const sql = database();
@@ -207,9 +215,10 @@ export async function createOrder(input: {
   if (products.length !== ids.length) throw new Error("Uno de los productos ya no está disponible.");
   const total = products.reduce((sum, product) => sum + product.price * (quantities.get(product.id) ?? 0), 0);
   return sql.begin(async (transaction) => {
+    const customerToken = crypto.randomUUID();
     const [created] = await transaction<{ id: number }[]>`
-      INSERT INTO orders (location_id, location_name, customer_name, notes, total)
-      VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total})
+      INSERT INTO orders (location_id, location_name, customer_name, notes, total, customer_token)
+      VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total}, ${customerToken})
       RETURNING id::int
     `;
     for (const product of products) {
@@ -218,8 +227,73 @@ export async function createOrder(input: {
         VALUES (${created.id}, ${product.id}, ${product.name}, ${product.price}, ${quantities.get(product.id) ?? 0})
       `;
     }
-    return { id: created.id, total, locationName: location.name, status: "Nuevo" as const };
+    return { id: created.id, total, locationName: location.name, status: "Nuevo" as const, customerToken };
   });
+}
+
+export async function getCustomerOrder(token: string) {
+  await ensureDatabase();
+  if (!token || token.length > 100) return null;
+  const sql = database();
+  const [order] = await sql<Record<string, unknown>[]>`
+    SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, paid,
+      customer_closed, created_at, updated_at FROM orders WHERE customer_token=${token}`;
+  if (!order || order.customer_closed || order.status === "Cancelado") return null;
+  const items = await sql<Record<string, unknown>[]>`
+    SELECT product_id::int, product_name, unit_price, quantity FROM order_items WHERE order_id=${Number(order.id)} ORDER BY id`;
+  return {
+    id: order.id, locationId: order.location_id, locationName: order.location_name,
+    customerName: order.customer_name, notes: order.notes, total: order.total,
+    status: order.status, paid: order.paid, createdAt: order.created_at, updatedAt: order.updated_at,
+    items: items.map(item => ({ productId:item.product_id, productName:item.product_name, unitPrice:item.unit_price, quantity:item.quantity })),
+  };
+}
+
+export async function updateCustomerOrder(token: string, input: {
+  customerName: string; notes?: string; locationId: number;
+  items: { productId: number; quantity: number }[];
+}) {
+  await ensureDatabase();
+  const sql = database();
+  const [order] = await sql<{id:number;locationName:string;total:number;status:string}[]>`
+    SELECT id::int, location_name AS "locationName", total, status FROM orders
+    WHERE customer_token=${token} AND customer_closed=FALSE`;
+  if (!order || ["Entregado","Cancelado"].includes(order.status)) throw new Error("Este pedido ya no se puede modificar.");
+  if (!input.items?.length && input.locationId === undefined) throw new Error("No hay cambios para guardar.");
+  const [location] = await sql<{id:number;name:string}[]>`SELECT id::int,name FROM locations WHERE id=${input.locationId} AND active=TRUE`;
+  if (!location) throw new Error("La ubicación seleccionada no está disponible.");
+  const quantities = new Map<number,number>();
+  for (const item of input.items) {
+    if (!Number.isInteger(item.productId) || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 30) throw new Error("Cantidad inválida.");
+    quantities.set(item.productId,(quantities.get(item.productId)??0)+item.quantity);
+  }
+  const ids=[...quantities.keys()];
+  const products=ids.length?await sql<{id:number;name:string;price:number}[]>`SELECT id::int,name,price FROM products WHERE active=TRUE AND id IN ${sql(ids)}`:[];
+  if(products.length!==ids.length) throw new Error("Uno de los productos ya no está disponible.");
+  const addition=products.reduce((sum,p)=>sum+p.price*(quantities.get(p.id)??0),0);
+  const additions=products.map(p=>`${quantities.get(p.id)}× ${p.name}`).join(", ");
+  const locationChange=location.name!==order.locationName?` · Ubicación: ${order.locationName} → ${location.name}`:"";
+  const updateNote=[additions?`Agregó: ${additions}`:"",locationChange.replace(/^ · /,"")].filter(Boolean).join(" · ")||"El cliente actualizó los datos del pedido";
+  return sql.begin(async transaction=>{
+    for(const product of products) {
+      const quantity=quantities.get(product.id)??0;
+      const [existing]=await transaction<{id:number;quantity:number}[]>`SELECT id::int,quantity FROM order_items WHERE order_id=${order.id} AND product_id=${product.id} LIMIT 1`;
+      if(existing) await transaction`UPDATE order_items SET quantity=${existing.quantity+quantity} WHERE id=${existing.id}`;
+      else await transaction`INSERT INTO order_items(order_id,product_id,product_name,unit_price,quantity) VALUES(${order.id},${product.id},${product.name},${product.price},${quantity})`;
+    }
+    await transaction`UPDATE orders SET location_id=${location.id},location_name=${location.name},
+      customer_name=${input.customerName.trim().slice(0,80)},notes=${(input.notes??"").trim().slice(0,500)},
+      total=${order.total+addition},paid=FALSE,modified=TRUE,
+      update_note=${updateNote},updated_at=NOW() WHERE id=${order.id}`;
+    return {id:order.id,total:order.total+addition,locationName:location.name,status:order.status};
+  });
+}
+
+export async function closeCustomerOrder(token:string) {
+  await ensureDatabase();
+  const result=await database()`UPDATE orders SET customer_closed=TRUE,updated_at=NOW()
+    WHERE customer_token=${token} AND status='Entregado' AND paid=TRUE AND customer_closed=FALSE RETURNING id`;
+  if(!result.length) throw new Error("El pedido solo puede finalizar cuando esté entregado y cobrado.");
 }
 
 export async function adminData() {
@@ -228,7 +302,7 @@ export async function adminData() {
   const [products, locations, orders, items, [stats], [settings], banners, schedule, categories] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
-    sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 100`,
+    sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, paid, modified, update_note, customer_closed, created_at, updated_at FROM orders ORDER BY created_at DESC LIMIT 100`,
     sql<Record<string, unknown>[]>`SELECT order_id::int, product_id::int, product_name, unit_price, quantity FROM order_items WHERE order_id IN (SELECT id FROM orders ORDER BY created_at DESC LIMIT 100) ORDER BY id`,
     sql<{ count: number; sales: number; average: number }[]>`
       SELECT COUNT(*)::int AS count, COALESCE(SUM(total), 0)::int AS sales,
@@ -248,7 +322,8 @@ export async function adminData() {
     orders: orders.map((order) => ({
       id: order.id, locationId: order.location_id, locationName: order.location_name,
       customerName: order.customer_name, notes: order.notes, total: order.total,
-      status: order.status, createdAt: order.created_at,
+      status: order.status, paid:order.paid, modified:order.modified, updateNote:order.update_note,
+      customerClosed:order.customer_closed, createdAt: order.created_at, updatedAt:order.updated_at,
       items: items.filter((item) => item.order_id === order.id).map((item) => ({
         productId: item.product_id, productName: item.product_name,
         unitPrice: item.unit_price, quantity: item.quantity,
@@ -393,6 +468,16 @@ export async function deleteCategory(id: number) {
 
 export async function updateOrderStatus(id: number, status: OrderStatus) {
   await ensureDatabase();
-  if (!["Nuevo", "Preparando", "Listo", "Entregado", "Cancelado"].includes(status)) throw new Error("Estado inválido.");
+  if (!["Nuevo", "Aceptado", "En preparación", "Entregado", "Cancelado"].includes(status)) throw new Error("Estado inválido.");
   await database()`UPDATE orders SET status=${status}, updated_at=NOW() WHERE id=${id}`;
+}
+
+export async function updateOrderPaid(id:number,paid:boolean) {
+  await ensureDatabase();
+  await database()`UPDATE orders SET paid=${paid},updated_at=NOW() WHERE id=${id}`;
+}
+
+export async function acknowledgeOrderChanges(id:number) {
+  await ensureDatabase();
+  await database()`UPDATE orders SET modified=FALSE,update_note='',updated_at=NOW() WHERE id=${id}`;
 }

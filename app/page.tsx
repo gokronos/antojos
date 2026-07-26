@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- restaurant images are persisted as optimized data URLs */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 
 type Product = { id: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
@@ -11,6 +11,7 @@ type Settings = { name: string; tagline: string; welcomeMessage: string; accepti
 type Banner = { id:number; eyebrow:string; title:string; text:string; image:string; active:boolean; position:number };
 type ScheduleDay = { weekday:number; day:string; openTime:string; closeTime:string; enabled:boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void> };
+type ActiveOrder = { id:number; locationId:number; locationName:string; customerName:string; notes:string; total:number; status:"Nuevo"|"Aceptado"|"En preparación"|"Entregado"; paid:boolean; items:{productId:number;productName:string;unitPrice:number;quantity:number}[] };
 
 const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
 
@@ -34,6 +35,8 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [, setInstallPrompt] = useState<InstallPrompt | null>(null);
+  const [activeOrder,setActiveOrder]=useState<ActiveOrder|null>(null);
+  const [orderDetailOpen,setOrderDetailOpen]=useState(false);
 
   useEffect(() => {
     fetch("/api/menu", { cache: "no-store" })
@@ -60,6 +63,29 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
+
+  const refreshActiveOrder=useCallback(async()=>{
+    const token=window.localStorage.getItem("antojos-active-order");
+    if(!token) return;
+    try {
+      const response=await fetch(`/api/orders?token=${encodeURIComponent(token)}`,{cache:"no-store"});
+      const result=await response.json();
+      if(response.ok&&result.order) {
+        setActiveOrder(result.order);
+        setName(result.order.customerName);
+        setLocationId(result.order.locationId);
+      } else {
+        window.localStorage.removeItem("antojos-active-order");
+        setActiveOrder(null);
+      }
+    } catch {}
+  },[]);
+
+  useEffect(()=>{
+    const initial=window.setTimeout(refreshActiveOrder,0);
+    const timer=window.setInterval(refreshActiveOrder,10000);
+    return()=>{window.clearTimeout(initial);window.clearInterval(timer);};
+  },[refreshActiveOrder]);
 
   useEffect(() => {
     if (banners.length < 2) return;
@@ -92,32 +118,44 @@ export default function Home() {
   );
 
   async function submitOrder() {
-    if (!name.trim() || !cart.length || !locationId) return;
+    if (!name.trim() || (!cart.length && !activeOrder) || !locationId) return;
     setSending(true);
     setError("");
     try {
+      const token=window.localStorage.getItem("antojos-active-order");
       const response = await fetch("/api/orders", {
-        method: "POST",
+        method: activeOrder&&token?"PATCH":"POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerName: name,
           notes,
           locationId,
-          items: cart.map((item) => ({ productId: item.id, quantity: item.qty })),
+          items: cart.map((item) => ({ productId: item.id, quantity: item.qty })), token,
         }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       setCheckout(false);
+      if(result.customerToken) window.localStorage.setItem("antojos-active-order",result.customerToken);
       setSuccess({ id: result.id, locationName: result.locationName });
       setCart([]);
-      setName("");
       setNotes("");
+      await refreshActiveOrder();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No fue posible enviar el pedido.");
     } finally {
       setSending(false);
     }
+  }
+
+  async function finishOrder() {
+    const token=window.localStorage.getItem("antojos-active-order");
+    if(!token)return;
+    const response=await fetch("/api/orders",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"close",token})});
+    const result=await response.json();
+    if(!response.ok){setError(result.error);return;}
+    window.localStorage.removeItem("antojos-active-order");
+    setActiveOrder(null);setOrderDetailOpen(false);setName("");
   }
 
   return (
@@ -132,6 +170,7 @@ export default function Home() {
         <div><span className="eyebrow">{currentBanner?.eyebrow||"BIENVENIDOS"} · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>{currentBanner?.title||"¿Qué se le antoja comer hoy?"}</h1><p>{currentBanner?.text||settings.welcomeMessage}</p>{!settings.acceptingOrders && <b className="closed-banner">El local está pausado · Puede consultar el menú</b>}{banners.length>1&&<div className="banner-controls"><button onClick={()=>setBannerIndex((index)=>(index-1+banners.length)%banners.length)}>←</button><span>{banners.map((banner,index)=><i className={index===bannerIndex%banners.length?"active":""} key={banner.id}/>)}</span><button onClick={()=>setBannerIndex((index)=>(index+1)%banners.length)}>→</button></div>}</div>
         {!currentBanner?.image&&<div className="hero-dish"><span>🍔</span><i>100%<br /><small>artesanal</small></i></div>}
       </section>
+      {activeOrder&&<section className="active-order-wrap"><div className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.status}{activeOrder.paid?" · Cobrado":""}</strong><p>{activeOrder.items.reduce((sum,item)=>sum+item.quantity,0)} productos · {activeOrder.locationName} · {money(activeOrder.total)}</p></div></div><div className="order-progress">{["Nuevo","Aceptado","En preparación","Entregado"].map((status,index)=><span className={["Nuevo","Aceptado","En preparación","Entregado"].indexOf(activeOrder.status)>=index?"done":""} key={status}><i>{index===0?"●":"✓"}</i><small>{status}</small></span>)}</div><div className="active-actions"><button onClick={()=>setOrderDetailOpen(value=>!value)}>{orderDetailOpen?"Ocultar detalle":"Ver mi pedido"}</button><button onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar productos</button><button onClick={()=>setCheckout(true)}>✎ Cambiar ubicación</button></div></div>{orderDetailOpen&&<div className="customer-order-detail"><div className="customer-detail-head"><div><small>SU CUENTA</small><h3>Detalle del pedido</h3></div><span>{activeOrder.paid?"✓ Pagado":"Pago pendiente"}</span></div>{activeOrder.items.map((item,index)=><div className="customer-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}<small>{money(item.unitPrice)} cada uno</small></span><strong>{money(item.quantity*item.unitPrice)}</strong></div>)}<div className="customer-total"><span>Total</span><strong>{money(activeOrder.total)}</strong></div>{activeOrder.status==="Entregado"&&activeOrder.paid?<button className="finish-order" onClick={finishOrder}>Confirmar recibido y finalizar</button>:<p className="finish-help">Puede seguir agregando productos al mismo pedido. Podrá finalizar cuando el local lo marque entregado y cobrado.</p>}</div>}</section>}
       <section className="menu-area">
         <div className="menu-tools"><div><h2>Nuestro menú</h2><p>Todo preparado al momento</p></div><label className="search">⌕<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar en el menú" /></label></div>
         {loading && <div className="system-message">Cargando el menú…</div>}
@@ -147,8 +186,8 @@ export default function Home() {
         <div className="cart-items">{cart.map((item) => <div key={item.id}><span>{item.icon}</span><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => changeQty(item.id, -1)}>−</button><b>{item.qty}</b><button onClick={() => changeQty(item.id, 1)}>＋</button></div></div>)}</div>
         <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length || !settings.acceptingOrders} onClick={() => { setCartOpen(false); setCheckout(true); }}>{settings.acceptingOrders ? "Continuar pedido →" : "Pedidos pausados"}</button>
       </aside></div>}
-      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido y llevarlo al lugar correcto.</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>¿Dónde está?<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>Alerta al local</strong><small>El pedido aparecerá inmediatamente en el panel</small></div></div><button className="checkout-btn" disabled={!name.trim() || sending || !locationId} onClick={submitOrder}>{sending ? "Enviando…" : `Enviar pedido · ${money(total)}`}</button></div></div>}
-      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido recibido!</h2><p>El pedido ya apareció en el panel del local.</p><b>Pedido #{success.id} · {success.locationName}</b><button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
+      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea agregar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Los productos nuevos o el cambio de ubicación se guardarán en el mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>¿Dónde está?<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>{activeOrder?"Alerta de modificación":"Alerta al local"}</strong><small>{activeOrder?"El pedido original se actualizará sin crear una copia":"El pedido aparecerá inmediatamente en el panel"}</small></div></div><button className="checkout-btn" disabled={!name.trim() || sending || !locationId || (!activeOrder&&!cart.length)} onClick={submitOrder}>{sending ? "Enviando…" : `${activeOrder?"Actualizar":"Enviar"} pedido · ${money((activeOrder?.total??0)+total)}`}</button></div></div>}
+      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>{activeOrder?"¡Pedido actualizado!":"¡Pedido recibido!"}</h2><p>{activeOrder?"El local recibió los cambios en el mismo pedido.":"El pedido ya apareció en el panel del local."}</p><b>Pedido #{success.id} · {success.locationName}</b><button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
     </main>
   );
 }
