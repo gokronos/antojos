@@ -20,6 +20,16 @@ const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency",
 
 export default function Home() {
   const [mode, setMode] = useState<"menu" | "admin">("menu");
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [historyPeriod, setHistoryPeriod] = useState<"Día"|"Semana"|"Quincena"|"Mes">("Día");
+  const [userEdit, setUserEdit] = useState<{id:number;name:string;username:string;role:string}|null>(null);
+  const [users, setUsers] = useState([
+    {id:1,name:"Andrea Martínez",username:"andrea",role:"Propietaria",active:true},
+    {id:2,name:"Camila Rojas",username:"camila",role:"Administradora",active:true},
+  ]);
   const [products, setProducts] = useState(seed);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [category, setCategory] = useState("Todos");
@@ -43,10 +53,18 @@ export default function Home() {
   const [notes, setNotes] = useState("");
   const [orders, setOrders] = useState([
     { id: "1048", table: "Mesa 06", name: "Laura", total: 38900, status: "Nuevo", ago: "Hace 2 min" },
-    { id: "1047", table: "Mesa 02", name: "Carlos", total: 47800, status: "Preparando", ago: "Hace 7 min" },
+    { id: "1047", table: "Mesa 02", name: "Carlos", total: 47800, status: "En preparación", ago: "Hace 7 min" },
     { id: "1046", table: "Para llevar", name: "Valentina", total: 31900, status: "Listo", ago: "Hace 14 min" },
   ]);
   const [editId, setEditId] = useState<number | null>(null);
+  const statusFlow = ["Nuevo", "Aceptado", "En preparación", "Listo", "Entregado"];
+  const historyRows = [
+    {date:"26 jul · 8:42 p. m.",id:"1046",name:"Valentina",place:"Para llevar",total:31900,status:"Entregado"},
+    {date:"26 jul · 8:10 p. m.",id:"1045",name:"Miguel",place:"Mesa 03",total:52900,status:"Entregado"},
+    {date:"26 jul · 7:34 p. m.",id:"1044",name:"Sara",place:"Barra 01",total:24700,status:"Entregado"},
+    {date:"26 jul · 6:58 p. m.",id:"1043",name:"Daniel",place:"Mesa 01",total:44300,status:"Entregado"},
+  ];
+  const periodTotals = {Día:{sales:486300,orders:18,average:27016},Semana:{sales:2846900,orders:106,average:26858},Quincena:{sales:6124500,orders:231,average:26513},Mes:{sales:12867400,orders:489,average:26314}};
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
@@ -69,6 +87,16 @@ export default function Home() {
     setOrders(o => [{ id: String(1049 + o.length), table, name, total, status: "Nuevo", ago: "Ahora" }, ...o]);
     setCheckout(false); setSuccess(true); setCart([]);
   };
+  const advanceStatus = (id:string) => setOrders(xs=>xs.map(o=>{
+    if(o.id!==id)return o;
+    const current=statusFlow.indexOf(o.status);
+    return {...o,status:statusFlow[Math.min(current+1,statusFlow.length-1)]};
+  }));
+  const openAdmin = () => authenticated ? setMode("admin") : setLoginOpen(true);
+  const signIn = () => {
+    if(!loginUser.trim() || !loginPassword.trim())return;
+    setAuthenticated(true);setLoginOpen(false);setMode("admin");setLoginPassword("");
+  };
 
   if (mode === "admin") return (
     <main className="admin-shell">
@@ -78,10 +106,11 @@ export default function Home() {
           <button className="active">▦ <span>Pedidos</span><b>2</b></button>
           <button onClick={() => document.getElementById("products")?.scrollIntoView()}>◫ <span>Productos</span></button>
           <button onClick={() => document.getElementById("locations")?.scrollIntoView()}>⌁ <span>Mesas y barra</span></button>
-          <button>◷ <span>Historial</span></button>
-          <button>⚙ <span>Configuración</span></button>
+          <button onClick={() => document.getElementById("history")?.scrollIntoView()}>◷ <span>Historial</span></button>
+          <button onClick={() => document.getElementById("users")?.scrollIntoView()}>♙ <span>Usuarios</span></button>
         </nav>
         <button className="view-menu" onClick={() => setMode("menu")}>Ver menú del cliente ↗</button>
+        <button className="logout" onClick={()=>{setAuthenticated(false);setMode("menu")}}>Cerrar sesión</button>
       </aside>
       <section className="admin-main">
         <header className="admin-top"><div><p>Domingo, 26 de julio</p><h1>Buenas tardes, Andrea</h1></div><div className="open-pill"><i/> Local abierto</div></header>
@@ -95,9 +124,14 @@ export default function Home() {
           {orders.map((o, i) => <article className={`order ${i === 0 ? "urgent" : ""}`} key={o.id}>
             <div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong></div><small>{o.ago}</small></div>
             <h3>{o.name}</h3><p>{i === 0 ? "1 Burger de la casa · 2 Cerveza fría" : i === 1 ? "2 Perros especiales · 1 Limonada" : "1 Papas explosivas · 1 Cerveza"}</p>
-            <div className="order-foot"><strong>{money(o.total)}</strong><button className={`status ${o.status.toLowerCase()}`}>{o.status}⌄</button></div>
+            <div className="order-foot"><strong>{money(o.total)}</strong><button onClick={()=>advanceStatus(o.id)} className={`status status-${statusFlow.indexOf(o.status)}`}>{o.status}<small> →</small></button></div>
           </article>)}
         </div>
+        <section id="history">
+          <div className="section-title products-title"><div><h2>Historial de ventas</h2><p>Consulte el rendimiento del local por período</p></div><div className="period-tabs">{(["Día","Semana","Quincena","Mes"] as const).map(p=><button className={historyPeriod===p?"active":""} onClick={()=>setHistoryPeriod(p)} key={p}>{p}</button>)}</div></div>
+          <div className="history-summary"><article><span>Ventas del período</span><strong>{money(periodTotals[historyPeriod].sales)}</strong></article><article><span>Pedidos entregados</span><strong>{periodTotals[historyPeriod].orders}</strong></article><article><span>Ticket promedio</span><strong>{money(periodTotals[historyPeriod].average)}</strong></article></div>
+          <div className="history-table"><div className="history-head"><span>Fecha y hora</span><span>Pedido</span><span>Cliente / ubicación</span><span>Total</span><span>Estado</span></div>{historyRows.map(r=><div className="history-row" key={r.id}><span>{r.date}</span><b>#{r.id}</b><span><strong>{r.name}</strong><small>{r.place}</small></span><b>{money(r.total)}</b><em>✓ {r.status}</em></div>)}</div>
+        </section>
         <div className="section-title products-title" id="products"><div><h2>Productos</h2><p>{products.filter(p=>p.active).length} disponibles en el menú</p></div><button onClick={() => {
           const id = Date.now(); setProducts(p => [...p, {id,name:"Nuevo producto",description:"Edite la descripción",price:10000,category:"Hamburguesas",icon:"🍽️",active:true}]); setEditId(id);
         }}>＋ Agregar producto</button></div>
@@ -114,17 +148,21 @@ export default function Home() {
           </article>)}
         </div>
         <div className="install-card"><div><span>📲</span><div><strong>Aplicación para el teléfono del local</strong><p>Instálela en Android y ábrala desde la pantalla de inicio, sin computador.</p></div></div><button disabled={!installPrompt} onClick={async()=>{if(installPrompt){await installPrompt.prompt();setInstallPrompt(null)}}}>{installPrompt ? "Instalar aplicación" : "Lista para instalar"}</button></div>
+        <section id="users"><div className="section-title products-title"><div><h2>Usuarios administradores</h2><p>Controle quién puede ver ventas, pedidos y configuración</p></div><button onClick={()=>setUserEdit({id:Date.now(),name:"",username:"",role:"Administrador"})}>＋ Crear usuario</button></div>
+          <div className="user-list">{users.map(u=><article key={u.id}><span className="avatar">{u.name.split(" ").map(x=>x[0]).slice(0,2).join("")}</span><div><strong>{u.name}</strong><small>@{u.username} · {u.role}</small></div><i>{u.active?"Activo":"Inactivo"}</i><button className="edit" onClick={()=>setUserEdit({...u})}>Editar</button></article>)}</div>
+        </section>
       </section>
       {editId !== null && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();setEditId(null)}}><button type="button" className="close" onClick={()=>setEditId(null)}>×</button><h2>Editar producto</h2><p>Los cambios aparecerán de inmediato en el menú.</p>
         {(() => { const p=products.find(x=>x.id===editId); if(!p)return null; return <><label>Nombre<input value={p.name} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,name:e.target.value}:x))}/></label><label>Descripción<textarea value={p.description} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,description:e.target.value}:x))}/></label><div className="form-row"><label>Precio<input type="number" value={p.price} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,price:Number(e.target.value)}:x))}/></label><label>Categoría<select value={p.category} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,category:e.target.value}:x))}>{categories.slice(1).map(c=><option key={c}>{c}</option>)}</select></label></div><button className="save">Guardar cambios</button></> })()}
       </form></div>}
       {locationEdit && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!locationEdit.name.trim())return;setLocations(xs=>xs.some(x=>x.id===locationEdit.id)?xs.map(x=>x.id===locationEdit.id?locationEdit:x):[...xs,locationEdit]);setLocationEdit(null)}}><button type="button" className="close" onClick={()=>setLocationEdit(null)}>×</button><h2>{locations.some(x=>x.id===locationEdit.id)?"Editar ubicación":"Crear ubicación"}</h2><p>Puede agregar mesas, puestos en la barra o cualquier otro punto de entrega.</p><label>Nombre<input autoFocus value={locationEdit.name} onChange={e=>setLocationEdit({...locationEdit,name:e.target.value})} placeholder="Ej. Barra 03"/></label><label>Tipo<select value={locationEdit.type} onChange={e=>setLocationEdit({...locationEdit,type:e.target.value as Location["type"]})}><option>Mesa</option><option>Barra</option><option>Otro</option></select></label><button className="save">Guardar ubicación</button>{locations.some(x=>x.id===locationEdit.id)&&<button type="button" className="delete-location" onClick={()=>{setLocations(xs=>xs.filter(x=>x.id!==locationEdit.id));setLocationEdit(null)}}>Eliminar ubicación</button>}</form></div>}
+      {userEdit && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!userEdit.name.trim()||!userEdit.username.trim())return;setUsers(xs=>xs.some(x=>x.id===userEdit.id)?xs.map(x=>x.id===userEdit.id?{...x,...userEdit}:x):[...xs,{...userEdit,active:true}]);setUserEdit(null)}}><button type="button" className="close" onClick={()=>setUserEdit(null)}>×</button><h2>{users.some(x=>x.id===userEdit.id)?"Editar usuario":"Crear usuario"}</h2><p>Esta persona podrá ingresar al panel privado del local.</p><label>Nombre completo<input value={userEdit.name} onChange={e=>setUserEdit({...userEdit,name:e.target.value})} placeholder="Ej. María Gómez"/></label><label>Usuario<input value={userEdit.username} onChange={e=>setUserEdit({...userEdit,username:e.target.value.replace(/\s/g,"").toLowerCase()})} placeholder="maria"/></label><label>Rol<select value={userEdit.role} onChange={e=>setUserEdit({...userEdit,role:e.target.value})}><option>Administrador</option><option>Operador de pedidos</option></select></label><label>Contraseña temporal<input type="password" placeholder="Mínimo 8 caracteres"/></label><button className="save">Guardar usuario</button></form></div>}
     </main>
   );
 
   return (
     <main className="customer">
-      <header className="menu-head"><div className="brand light"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div><button onClick={() => setMode("admin")} className="admin-link">Panel del local</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
+      <header className="menu-head"><div className="brand light"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div><button onClick={openAdmin} className="admin-link">Ingreso del personal</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
       <section className="hero">
         <div><span className="eyebrow">BIENVENIDOS · {table.toUpperCase()}</span><h1>¿Qué se le antoja<br/>comer hoy?</h1><p>Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.</p></div>
         <div className="hero-dish"><span>🍔</span><i>100%<br/><small>artesanal</small></i></div>
@@ -141,6 +179,7 @@ export default function Home() {
       </aside></div>}
       {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={()=>setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido y llevarlo al lugar correcto.</p><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej. Andrea"/></label><label>¿Dónde está?<select value={table} onChange={e=>setTable(e.target.value)}>{locations.filter(l=>l.active).map(l=><option key={l.id}>{l.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..."/></label><div className="pay-note"><span>🔔</span><div><strong>Alerta al local</strong><small>El pedido aparecerá en el panel y podrá notificarse por WhatsApp</small></div></div><button className="checkout-btn" disabled={!name.trim()} onClick={submitOrder}>Enviar pedido · {money(total)}</button></div></div>}
       {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido recibido!</h2><p>Ya estamos preparando todo. Le avisaremos cuando salga a su mesa.</p><b>Pedido #1052 · {table}</b><button onClick={()=>setSuccess(false)}>Volver al menú</button></div></div>}
+      {loginOpen && <div className="modal-back"><form className="login-card" onSubmit={e=>{e.preventDefault();signIn()}}><button type="button" className="close" onClick={()=>setLoginOpen(false)}>×</button><div className="brand"><span>ML</span><div>Mesa Lista<small>Acceso protegido</small></div></div><h2>Ingreso del personal</h2><p>Solo las personas autorizadas pueden administrar el local.</p><label>Usuario<input autoFocus value={loginUser} onChange={e=>setLoginUser(e.target.value)} placeholder="Ingrese su usuario"/></label><label>Contraseña<input type="password" value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="Ingrese su contraseña"/></label><button className="checkout-btn" disabled={!loginUser.trim()||!loginPassword.trim()}>Ingresar al panel</button><small>🔒 Sus ventas y pedidos permanecen protegidos.</small></form></div>}
     </main>
   );
 }
