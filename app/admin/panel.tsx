@@ -11,7 +11,8 @@ type Order = { id: number; locationName: string; customerName: string; notes: st
 type Settings = { name: string; tagline: string; welcomeMessage: string; currency: string; acceptingOrders: boolean; logo: string; primaryColor: string; accentColor: string; backgroundColor: string; address: string; phone: string; whatsapp: string; mapUrl: string };
 type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[] };
+type Category = { id:number; name:string; position:number };
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[] };
 type Section = "orders" | "products" | "locations" | "history" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
@@ -55,6 +56,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [manualOrder, setManualOrder] = useState<ManualOrder | null>(null);
+  const [categoriesOpen,setCategoriesOpen]=useState(false);
   const [settingsDraft, setSettingsDraft] = useState<Settings | null>(null);
   const [brandingDraft, setBrandingDraft] = useState<Settings | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDay[]>([]);
@@ -161,7 +163,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
         </>}
 
         {section === "products" && <>
-          <div className="section-title page-section-title"><div><h2>Productos</h2><p>{data.products.filter((product) => product.active).length} disponibles en el menú</p></div><button onClick={() => setEditingProduct({ name: "", description: "", price: 0, category: "Hamburguesas", icon: "🍽️", images: [], active: true })}>＋ Agregar producto</button></div>
+          <div className="section-title page-section-title"><div><h2>Productos</h2><p>{data.products.filter((product) => product.active).length} disponibles · {data.categories.length} categorías</p></div><div className="section-actions"><button className="secondary-action" onClick={() => setCategoriesOpen(true)}>▤ Categorías</button><button onClick={() => setEditingProduct({ name: "", description: "", price: 0, category: data.categories[0]?.name ?? "", icon: "🍽️", images: [], active: true })}>＋ Agregar producto</button></div></div>
           <div className="product-table">{data.products.map((product) => <div className="product-row" key={product.id}><span className="mini-food">{product.icon}</span><div><strong>{product.name}</strong><small>{product.category}</small></div><b>{money(product.price)}</b><label className="switch"><input type="checkbox" checked={product.active} onChange={() => action("saveProduct", { ...product, active: !product.active })} /><span /></label><button className="edit" onClick={() => setEditingProduct({ ...product })}>Editar</button></div>)}</div>
         </>}
 
@@ -219,12 +221,13 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
       </>}
     </section>
 
-    {editingProduct && <ProductModal product={editingProduct} saving={saving} onChange={setEditingProduct} onClose={() => setEditingProduct(null)} onSave={async () => { if (await action("saveProduct", editingProduct as unknown as Record<string, unknown>, "Producto guardado.")) setEditingProduct(null); }} />}
+    {editingProduct && <ProductModal product={editingProduct} categories={data?.categories ?? []} saving={saving} onChange={setEditingProduct} onClose={() => setEditingProduct(null)} onSave={async () => { if (await action("saveProduct", editingProduct as unknown as Record<string, unknown>, "Producto guardado.")) setEditingProduct(null); }} />}
     {editingLocation && <LocationModal location={editingLocation} saving={saving} onChange={setEditingLocation} onClose={() => setEditingLocation(null)} onSave={async () => { if (await action("saveLocation", editingLocation as unknown as Record<string, unknown>, "Ubicación guardada.")) setEditingLocation(null); }} onDelete={editingLocation.id ? async () => { if (window.confirm(`¿Eliminar ${editingLocation.name}?`)) { if (await action("deleteLocation", { id: editingLocation.id }, "Ubicación eliminada u ocultada para conservar el historial.")) setEditingLocation(null); } } : undefined} />}
     {manualOrder && <ManualOrderModal order={manualOrder} products={data?.products.filter((product) => product.active) ?? []} locations={data?.locations.filter((location) => location.active) ?? []} saving={saving} onChange={setManualOrder} onClose={() => setManualOrder(null)} onSave={async () => {
       const items = Object.entries(manualOrder.items).filter(([, quantity]) => quantity > 0).map(([productId, quantity]) => ({ productId: Number(productId), quantity }));
       if (await action("createOrder", { customerName: manualOrder.customerName, locationId: manualOrder.locationId, notes: manualOrder.notes, items }, "Pedido creado.")) setManualOrder(null);
     }} />}
+    {categoriesOpen && data && <CategoryModal categories={data.categories} products={data.products} saving={saving} onClose={() => setCategoriesOpen(false)} onAdd={(name) => action("saveCategory",{name},"Categoría creada.")} onDelete={(id) => action("deleteCategory",{id},"Categoría eliminada.")} />}
   </main>;
 }
 
@@ -238,13 +241,13 @@ function OrderCard({ order, saving, onStatus }: { order: Order; saving: boolean;
   </article>;
 }
 
-function ProductModal({ product, saving, onChange, onClose, onSave }: { product: Product; saving: boolean; onChange: (product: Product) => void; onClose: () => void; onSave: () => void }) {
+function ProductModal({ product, categories, saving, onChange, onClose, onSave }: { product: Product; categories:Category[]; saving: boolean; onChange: (product: Product) => void; onClose: () => void; onSave: () => void }) {
   return <div className="modal-back"><form className="edit-modal" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
     <button type="button" className="close" onClick={onClose}>×</button><h2>{product.id ? "Editar producto" : "Nuevo producto"}</h2><p>Los cambios aparecerán inmediatamente en el menú.</p>
     <div className="photo-section"><div><strong>Fotografías del producto</strong><small>Puede cargar hasta cinco imágenes</small></div><div className="photo-grid">{product.images.map((src,index) => <figure key={`${src.slice(-20)}-${index}`}><img src={src} alt={`${product.name} ${index+1}`} /><button type="button" onClick={() => onChange({ ...product, images:product.images.filter((_,itemIndex) => itemIndex !== index) })}>×</button>{index===0 && <b>Principal</b>}</figure>)}{product.images.length<5 && <label className="upload-tile">＋<span>Agregar fotos</span><small>JPG, PNG o WEBP</small><input type="file" accept="image/*" multiple onChange={async (event) => { const files=Array.from(event.target.files ?? []).slice(0,5-product.images.length); const images=await Promise.all(files.map((file) => optimizedImage(file,1200))); onChange({ ...product, images:[...product.images,...images] }); event.target.value=""; }} /></label>}</div></div>
     <label>Nombre<input required value={product.name} onChange={(event) => onChange({ ...product, name: event.target.value })} /></label>
     <label>Descripción<textarea value={product.description} onChange={(event) => onChange({ ...product, description: event.target.value })} /></label>
-    <div className="form-row"><label>Precio<input required min="0" type="number" value={product.price} onChange={(event) => onChange({ ...product, price: Number(event.target.value) })} /></label><label>Categoría<input required value={product.category} onChange={(event) => onChange({ ...product, category: event.target.value })} /></label></div>
+    <div className="form-row"><label>Precio<input required min="0" type="number" value={product.price} onChange={(event) => onChange({ ...product, price: Number(event.target.value) })} /></label><label>Categoría<select required value={product.category} onChange={(event) => onChange({ ...product, category: event.target.value })}>{categories.map((category)=><option key={category.id}>{category.name}</option>)}</select></label></div>
     <label>Icono<input value={product.icon} onChange={(event) => onChange({ ...product, icon: event.target.value })} /></label>
     <button className="save" disabled={saving}>{saving ? "Guardando…" : "Guardar producto"}</button>
   </form></div>;
@@ -271,6 +274,11 @@ function LocationModal({ location, saving, onChange, onClose, onSave, onDelete }
     <button className="save" disabled={saving}>{saving ? "Guardando…" : "Guardar ubicación"}</button>
     {onDelete && <button type="button" className="delete-location" disabled={saving} onClick={onDelete}>Eliminar ubicación</button>}
   </form></div>;
+}
+
+function CategoryModal({ categories, products, saving, onClose, onAdd, onDelete }: { categories:Category[]; products:Product[]; saving:boolean; onClose:()=>void; onAdd:(name:string)=>Promise<boolean>; onDelete:(id:number)=>Promise<boolean> }) {
+  const [name,setName]=useState("");
+  return <div className="modal-back"><div className="edit-modal category-modal"><button type="button" className="close" onClick={onClose}>×</button><h2>Categorías</h2><p>Organice el menú para que sus clientes encuentren todo fácilmente.</p><form className="category-create" onSubmit={async (event)=>{event.preventDefault();if(await onAdd(name)){setName("");}}}><input required value={name} onChange={(event)=>setName(event.target.value)} placeholder="Ej. Postres" maxLength={60}/><button disabled={saving}>＋ Crear</button></form><div className="category-list">{categories.map((category)=>{const count=products.filter((product)=>product.category===category.name).length;return <div key={category.id}><span><strong>{category.name}</strong><small>{count} producto{count===1?"":"s"}</small></span><button disabled={saving||count>0} title={count>0?"Mueva primero los productos a otra categoría":"Eliminar categoría"} onClick={()=>onDelete(category.id)}>Eliminar</button></div>;})}</div></div></div>;
 }
 
 function ManualOrderModal({ order, products, locations, saving, onChange, onClose, onSave }: { order: ManualOrder; products: Product[]; locations: Location[]; saving: boolean; onChange: (order: ManualOrder) => void; onClose: () => void; onSave: () => void }) {

@@ -84,6 +84,9 @@ export async function ensureDatabase() {
         type TEXT NOT NULL CHECK (type IN ('Mesa','Barra','Otro')),
         active BOOLEAN NOT NULL DEFAULT TRUE
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS categories (
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL DEFAULT 0
+      )`;
       await sql`CREATE TABLE IF NOT EXISTS orders (
         id BIGSERIAL PRIMARY KEY, location_id BIGINT REFERENCES locations(id),
         location_name TEXT NOT NULL, customer_name TEXT NOT NULL,
@@ -145,6 +148,9 @@ export async function ensureDatabase() {
           await sql`INSERT INTO products (name, description, price, category, icon) VALUES (${product[0]}, ${product[1]}, ${product[2]}, ${product[3]}, ${product[4]})`;
         }
       }
+      await sql`INSERT INTO categories (name, position)
+        SELECT category, ROW_NUMBER() OVER (ORDER BY MIN(id))::int - 1 FROM products
+        WHERE category <> '' GROUP BY category ON CONFLICT (name) DO NOTHING`;
       const [{ count: locationCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM locations`;
       if (locationCount === 0) {
         for (const location of initialLocations) {
@@ -219,7 +225,7 @@ export async function createOrder(input: {
 export async function adminData() {
   await ensureDatabase();
   const sql = database();
-  const [products, locations, orders, items, [stats], [settings], banners, schedule] = await Promise.all([
+  const [products, locations, orders, items, [stats], [settings], banners, schedule, categories] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 100`,
@@ -234,6 +240,7 @@ export async function adminData() {
       address, phone, whatsapp, map_url AS "mapUrl" FROM restaurant_settings WHERE id = 1`,
     sql<BannerRecord[]>`SELECT id::int, eyebrow, title, text, image, active, position FROM banners ORDER BY position, id`,
     sql<ScheduleRecord[]>`SELECT weekday::int, day, to_char(open_time,'HH24:MI') AS "openTime", to_char(close_time,'HH24:MI') AS "closeTime", enabled FROM schedule_days ORDER BY weekday`,
+    sql<{id:number;name:string;position:number}[]>`SELECT id::int, name, position FROM categories ORDER BY position, name`,
   ]);
   return {
     products,
@@ -251,6 +258,7 @@ export async function adminData() {
     settings,
     banners,
     schedule,
+    categories,
   };
 }
 
@@ -362,6 +370,25 @@ export async function saveSchedule(input: ScheduleRecord[]) {
       await transaction`UPDATE schedule_days SET open_time=${item.openTime}, close_time=${item.closeTime}, enabled=${Boolean(item.enabled)} WHERE weekday=${item.weekday}`;
     }
   });
+}
+
+export async function saveCategory(nameInput: string) {
+  await ensureDatabase();
+  const name = nameInput.trim().slice(0,60);
+  if (!name) throw new Error("Escriba el nombre de la categoría.");
+  const sql = database();
+  const [{ next }] = await sql<{next:number}[]>`SELECT COALESCE(MAX(position),-1)::int + 1 AS next FROM categories`;
+  await sql`INSERT INTO categories (name,position) VALUES (${name},${next}) ON CONFLICT (name) DO NOTHING`;
+}
+
+export async function deleteCategory(id: number) {
+  await ensureDatabase();
+  const sql = database();
+  const [category] = await sql<{name:string}[]>`SELECT name FROM categories WHERE id=${id}`;
+  if (!category) return;
+  const [{ count }] = await sql<{count:number}[]>`SELECT COUNT(*)::int AS count FROM products WHERE category=${category.name}`;
+  if (count > 0) throw new Error(`No puede eliminar “${category.name}” porque tiene ${count} producto(s).`);
+  await sql`DELETE FROM categories WHERE id=${id}`;
 }
 
 export async function updateOrderStatus(id: number, status: OrderStatus) {
