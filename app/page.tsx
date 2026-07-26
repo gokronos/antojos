@@ -6,6 +6,7 @@ type Product = { id: number; name: string; description: string; price: number; c
 type CartItem = Product & { qty: number };
 type Location = { id: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+type ActiveOrder = { id:string; status:string; total:number; table:string; name:string; itemCount:number };
 
 const seed: Product[] = [
   { id: 1, name: "Burger de la casa", description: "Carne artesanal, queso, tocineta y salsa de la casa", price: 24900, category: "Hamburguesas", icon: "🍔", active: true },
@@ -64,6 +65,7 @@ export default function Home() {
   const [editId, setEditId] = useState<number | null>(null);
   const [statusMenuId, setStatusMenuId] = useState<string | null>(null);
   const [productPhotos, setProductPhotos] = useState<Record<number,string[]>>({});
+  const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
   const statusFlow = ["Nuevo", "Aceptado", "En preparación", "Entregado"];
   const statusIcon:Record<string,string> = {"Nuevo":"●","Aceptado":"✓","En preparación":"◴","Entregado":"✓"};
   const historyRows = [
@@ -78,8 +80,14 @@ export default function Home() {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
     const handler = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPrompt); };
     window.addEventListener("beforeinstallprompt", handler);
+    const savedOrder = window.localStorage.getItem("mesa-lista-active-order");
+    if(savedOrder) setActiveOrder(JSON.parse(savedOrder));
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
+  useEffect(()=>{
+    if(activeOrder) window.localStorage.setItem("mesa-lista-active-order",JSON.stringify(activeOrder));
+    else window.localStorage.removeItem("mesa-lista-active-order");
+  },[activeOrder]);
 
   const categories = ["Todos", ...categoryList];
   const visible = products.filter(p => p.active && (category === "Todos" || p.category === category) && p.name.toLowerCase().includes(search.toLowerCase()));
@@ -91,11 +99,22 @@ export default function Home() {
   });
   const changeQty = (id: number, d: number) => setCart(c => c.map(x => x.id === id ? { ...x, qty: x.qty + d } : x).filter(x => x.qty > 0));
   const submitOrder = () => {
-    if (!name.trim() || !cart.length) return;
-    setOrders(o => [{ id: String(1049 + o.length), table, name, total, status: "Nuevo", ago: "Ahora" }, ...o]);
+    if (!name.trim() || (!cart.length && !activeOrder)) return;
+    if(activeOrder){
+      const updated={...activeOrder,table,name,total:activeOrder.total+total,itemCount:activeOrder.itemCount+count};
+      setActiveOrder(updated);
+      setOrders(xs=>xs.map(o=>o.id===activeOrder.id?{...o,table,name,total:updated.total}:o));
+    } else {
+      const id="1052";
+      setActiveOrder({id,status:"Nuevo",total,table,name,itemCount:count});
+      setOrders(o => [{ id, table, name, total, status: "Nuevo", ago: "Ahora" }, ...o]);
+    }
     setCheckout(false); setSuccess(true); setCart([]);
   };
-  const setOrderStatus = (id:string,status:string) => setOrders(xs=>xs.map(o=>o.id===id?{...o,status}:o));
+  const setOrderStatus = (id:string,status:string) => {
+    setOrders(xs=>xs.map(o=>o.id===id?{...o,status}:o));
+    setActiveOrder(current=>current?.id===id?{...current,status}:current);
+  };
   const filteredOrders = orders.filter(o=>orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter);
   const openAdmin = () => authenticated ? setMode("admin") : setLoginOpen(true);
   const signIn = () => {
@@ -172,6 +191,7 @@ export default function Home() {
   return (
     <main className="customer">
       <header className="menu-head"><div className="brand light"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div><button onClick={openAdmin} className="admin-link">Ingreso del personal</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
+      {activeOrder&&<section className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.status}</strong><p>{activeOrder.itemCount} productos · {activeOrder.table} · {money(activeOrder.total)}</p></div></div><div className="order-progress">{statusFlow.map((s,i)=><span className={statusFlow.indexOf(activeOrder.status)>=i?"done":""} key={s}><i>{statusIcon[s]}</i><small>{s}</small></span>)}</div><div className="active-actions"><button onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar productos</button><button onClick={()=>{setName(activeOrder.name);setTable(activeOrder.table);setCheckout(true)}}>✎ Cambiar ubicación</button></div></section>}
       <section className="hero">
         <div><span className="eyebrow">BIENVENIDOS · {table.toUpperCase()}</span><h1>¿Qué se le antoja<br/>comer hoy?</h1><p>Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.</p></div>
         <div className="hero-dish"><span>🍔</span><i>100%<br/><small>artesanal</small></i></div>
@@ -186,8 +206,8 @@ export default function Home() {
         <div className="cart-items">{cart.map(x=><div key={x.id}><span>{x.icon}</span><div><strong>{x.name}</strong><small>{money(x.price)}</small></div><div className="qty"><button onClick={()=>changeQty(x.id,-1)}>−</button><b>{x.qty}</b><button onClick={()=>changeQty(x.id,1)}>＋</button></div></div>)}</div>
         <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length} onClick={()=>{setCartOpen(false);setCheckout(true)}}>Continuar pedido →</button>
       </aside></div>}
-      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={()=>setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido y llevarlo al lugar correcto.</p><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej. Andrea"/></label><label>¿Dónde está?<select value={table} onChange={e=>setTable(e.target.value)}>{locations.filter(l=>l.active).map(l=><option key={l.id}>{l.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..."/></label><div className="pay-note"><span>🔔</span><div><strong>Alerta al local</strong><small>El pedido aparecerá en el panel y podrá notificarse por WhatsApp</small></div></div><button className="checkout-btn" disabled={!name.trim()} onClick={submitOrder}>Enviar pedido · {money(total)}</button></div></div>}
-      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido recibido!</h2><p>Ya estamos preparando todo. Le avisaremos cuando salga a su mesa.</p><b>Pedido #1052 · {table}</b><button onClick={()=>setSuccess(false)}>Volver al menú</button></div></div>}
+      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={()=>setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea cambiar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Puede cambiar la ubicación o sumar los productos nuevos al mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej. Andrea"/></label><label>¿Dónde está?<select value={table} onChange={e=>setTable(e.target.value)}>{locations.filter(l=>l.active).map(l=><option key={l.id}>{l.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..."/></label><div className="pay-note"><span>☁</span><div><strong>{activeOrder?"Se actualizará el mismo pedido":"Pedido vinculado a este navegador"}</strong><small>Podrá regresar al enlace y consultar o actualizar su pedido activo</small></div></div><button className="checkout-btn" disabled={!name.trim()} onClick={submitOrder}>{activeOrder?"Actualizar pedido":"Enviar pedido"} · {money((activeOrder?.total||0)+total)}</button></div></div>}
+      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido actualizado!</h2><p>El local recibirá los cambios en el mismo pedido. Puede seguir agregando productos mientras continúe activo.</p><b>Pedido #{activeOrder?.id||"1052"} · {table}</b><button onClick={()=>setSuccess(false)}>Volver al menú</button></div></div>}
       {loginOpen && <div className="modal-back"><form className="login-card" onSubmit={e=>{e.preventDefault();signIn()}}><button type="button" className="close" onClick={()=>setLoginOpen(false)}>×</button><div className="brand"><span>ML</span><div>Mesa Lista<small>Acceso protegido</small></div></div><h2>Ingreso del personal</h2><p>Solo las personas autorizadas pueden administrar el local.</p><label>Usuario<input autoFocus value={loginUser} onChange={e=>setLoginUser(e.target.value)} placeholder="Ingrese su usuario"/></label><label>Contraseña<input type="password" value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="Ingrese su contraseña"/></label><button className="checkout-btn" disabled={!loginUser.trim()||!loginPassword.trim()}>Ingresar al panel</button><small>🔒 Sus ventas y pedidos permanecen protegidos.</small></form></div>}
     </main>
   );
