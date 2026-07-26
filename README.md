@@ -4,6 +4,12 @@ Sistema web de menú y pedidos para restaurantes. Los clientes abren el menú
 desde un enlace, envían su pedido y el local lo administra en tiempo real desde
 un panel instalable como PWA.
 
+## Producción
+
+- Menú público: https://antojos.vercel.app
+- Panel del local: https://antojos.vercel.app/admin
+- Código: https://github.com/gokronos/antojos
+
 ## Tecnología
 
 - Next.js 16 y React 19
