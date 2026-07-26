@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Product = { id: number; name: string; description: string; price: number; category: string; icon: string; active: boolean };
 type CartItem = Product & { qty: number };
+type Location = { id: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
+type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
 
 const seed: Product[] = [
   { id: 1, name: "Burger de la casa", description: "Carne artesanal, queso, tocineta y salsa de la casa", price: 24900, category: "Hamburguesas", icon: "🍔", active: true },
@@ -26,6 +28,17 @@ export default function Home() {
   const [checkout, setCheckout] = useState(false);
   const [success, setSuccess] = useState(false);
   const [table, setTable] = useState("Mesa 04");
+  const [locations, setLocations] = useState<Location[]>([
+    { id: 1, name: "Mesa 01", type: "Mesa", active: true },
+    { id: 2, name: "Mesa 02", type: "Mesa", active: true },
+    { id: 3, name: "Mesa 03", type: "Mesa", active: true },
+    { id: 4, name: "Mesa 04", type: "Mesa", active: true },
+    { id: 5, name: "Barra 01", type: "Barra", active: true },
+    { id: 6, name: "Barra 02", type: "Barra", active: true },
+    { id: 7, name: "Para llevar", type: "Otro", active: true },
+  ]);
+  const [locationEdit, setLocationEdit] = useState<Location | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [orders, setOrders] = useState([
@@ -34,6 +47,13 @@ export default function Home() {
     { id: "1046", table: "Para llevar", name: "Valentina", total: 31900, status: "Listo", ago: "Hace 14 min" },
   ]);
   const [editId, setEditId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+    const handler = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPrompt); };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
 
   const categories = ["Todos", ...Array.from(new Set(products.map(p => p.category)))];
   const visible = products.filter(p => p.active && (category === "Todos" || p.category === category) && p.name.toLowerCase().includes(search.toLowerCase()));
@@ -57,7 +77,7 @@ export default function Home() {
         <nav>
           <button className="active">▦ <span>Pedidos</span><b>2</b></button>
           <button onClick={() => document.getElementById("products")?.scrollIntoView()}>◫ <span>Productos</span></button>
-          <button>⌁ <span>Mesas y QR</span></button>
+          <button onClick={() => document.getElementById("locations")?.scrollIntoView()}>⌁ <span>Mesas y barra</span></button>
           <button>◷ <span>Historial</span></button>
           <button>⚙ <span>Configuración</span></button>
         </nav>
@@ -84,10 +104,21 @@ export default function Home() {
         <div className="product-table">
           {products.map(p => <div className="product-row" key={p.id}><span className="mini-food">{p.icon}</span><div><strong>{p.name}</strong><small>{p.category}</small></div><b>{money(p.price)}</b><label className="switch"><input type="checkbox" checked={p.active} onChange={() => setProducts(xs => xs.map(x => x.id===p.id?{...x,active:!x.active}:x))}/><span/></label><button className="edit" onClick={()=>setEditId(p.id)}>Editar</button></div>)}
         </div>
+        <div className="section-title products-title" id="locations"><div><h2>Mesas, barra y puntos de entrega</h2><p>Cree todos los lugares donde sus clientes pueden pedir</p></div><button onClick={() => setLocationEdit({id:Date.now(),name:"",type:"Mesa",active:true})}>＋ Crear ubicación</button></div>
+        <div className="location-grid">
+          {locations.map(l => <article className="location-card" key={l.id}>
+            <div className={`location-icon ${l.type.toLowerCase()}`}>{l.type === "Mesa" ? "▦" : l.type === "Barra" ? "▰" : "⌂"}</div>
+            <div><strong>{l.name}</strong><small>{l.type} · {l.active ? "Disponible" : "Oculta"}</small></div>
+            <label className="switch"><input type="checkbox" checked={l.active} onChange={() => setLocations(xs=>xs.map(x=>x.id===l.id?{...x,active:!x.active}:x))}/><span/></label>
+            <button className="edit" onClick={()=>setLocationEdit({...l})}>Editar</button>
+          </article>)}
+        </div>
+        <div className="install-card"><div><span>📲</span><div><strong>Aplicación para el teléfono del local</strong><p>Instálela en Android y ábrala desde la pantalla de inicio, sin computador.</p></div></div><button disabled={!installPrompt} onClick={async()=>{if(installPrompt){await installPrompt.prompt();setInstallPrompt(null)}}}>{installPrompt ? "Instalar aplicación" : "Lista para instalar"}</button></div>
       </section>
       {editId !== null && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();setEditId(null)}}><button type="button" className="close" onClick={()=>setEditId(null)}>×</button><h2>Editar producto</h2><p>Los cambios aparecerán de inmediato en el menú.</p>
         {(() => { const p=products.find(x=>x.id===editId); if(!p)return null; return <><label>Nombre<input value={p.name} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,name:e.target.value}:x))}/></label><label>Descripción<textarea value={p.description} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,description:e.target.value}:x))}/></label><div className="form-row"><label>Precio<input type="number" value={p.price} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,price:Number(e.target.value)}:x))}/></label><label>Categoría<select value={p.category} onChange={e=>setProducts(xs=>xs.map(x=>x.id===p.id?{...x,category:e.target.value}:x))}>{categories.slice(1).map(c=><option key={c}>{c}</option>)}</select></label></div><button className="save">Guardar cambios</button></> })()}
       </form></div>}
+      {locationEdit && <div className="modal-back"><form className="edit-modal" onSubmit={e=>{e.preventDefault();if(!locationEdit.name.trim())return;setLocations(xs=>xs.some(x=>x.id===locationEdit.id)?xs.map(x=>x.id===locationEdit.id?locationEdit:x):[...xs,locationEdit]);setLocationEdit(null)}}><button type="button" className="close" onClick={()=>setLocationEdit(null)}>×</button><h2>{locations.some(x=>x.id===locationEdit.id)?"Editar ubicación":"Crear ubicación"}</h2><p>Puede agregar mesas, puestos en la barra o cualquier otro punto de entrega.</p><label>Nombre<input autoFocus value={locationEdit.name} onChange={e=>setLocationEdit({...locationEdit,name:e.target.value})} placeholder="Ej. Barra 03"/></label><label>Tipo<select value={locationEdit.type} onChange={e=>setLocationEdit({...locationEdit,type:e.target.value as Location["type"]})}><option>Mesa</option><option>Barra</option><option>Otro</option></select></label><button className="save">Guardar ubicación</button>{locations.some(x=>x.id===locationEdit.id)&&<button type="button" className="delete-location" onClick={()=>{setLocations(xs=>xs.filter(x=>x.id!==locationEdit.id));setLocationEdit(null)}}>Eliminar ubicación</button>}</form></div>}
     </main>
   );
 
@@ -95,7 +126,7 @@ export default function Home() {
     <main className="customer">
       <header className="menu-head"><div className="brand light"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div><button onClick={() => setMode("admin")} className="admin-link">Panel del local</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
       <section className="hero">
-        <div><span className="eyebrow">BIENVENIDOS · MESA 04</span><h1>¿Qué se le antoja<br/>comer hoy?</h1><p>Prepare su pedido desde la mesa. Nosotros nos encargamos del resto.</p></div>
+        <div><span className="eyebrow">BIENVENIDOS · {table.toUpperCase()}</span><h1>¿Qué se le antoja<br/>comer hoy?</h1><p>Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.</p></div>
         <div className="hero-dish"><span>🍔</span><i>100%<br/><small>artesanal</small></i></div>
       </section>
       <section className="menu-area">
@@ -108,7 +139,7 @@ export default function Home() {
         <div className="cart-items">{cart.map(x=><div key={x.id}><span>{x.icon}</span><div><strong>{x.name}</strong><small>{money(x.price)}</small></div><div className="qty"><button onClick={()=>changeQty(x.id,-1)}>−</button><b>{x.qty}</b><button onClick={()=>changeQty(x.id,1)}>＋</button></div></div>)}</div>
         <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length} onClick={()=>{setCartOpen(false);setCheckout(true)}}>Continuar pedido →</button>
       </aside></div>}
-      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={()=>setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido al llevarlo a la mesa.</p><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej. Andrea"/></label><label>Mesa<select value={table} onChange={e=>setTable(e.target.value)}><option>Mesa 01</option><option>Mesa 02</option><option>Mesa 03</option><option>Mesa 04</option><option>Para llevar</option></select></label><label>Notas del pedido<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..."/></label><div className="pay-note"><span>💳</span><div><strong>Pago en el local</strong><small>Efectivo, transferencia o datáfono</small></div></div><button className="checkout-btn" disabled={!name.trim()} onClick={submitOrder}>Enviar pedido · {money(total)}</button></div></div>}
+      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={()=>setCheckout(false)}>×</button><span className="eyebrow">ÚLTIMO PASO</span><h2>¿A nombre de quién?</h2><p>Así podremos identificar su pedido y llevarlo al lugar correcto.</p><label>Nombre<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ej. Andrea"/></label><label>¿Dónde está?<select value={table} onChange={e=>setTable(e.target.value)}>{locations.filter(l=>l.active).map(l=><option key={l.id}>{l.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..."/></label><div className="pay-note"><span>🔔</span><div><strong>Alerta al local</strong><small>El pedido aparecerá en el panel y podrá notificarse por WhatsApp</small></div></div><button className="checkout-btn" disabled={!name.trim()} onClick={submitOrder}>Enviar pedido · {money(total)}</button></div></div>}
       {success && <div className="modal-back"><div className="success"><span>✓</span><h2>¡Pedido recibido!</h2><p>Ya estamos preparando todo. Le avisaremos cuando salga a su mesa.</p><b>Pedido #1052 · {table}</b><button onClick={()=>setSuccess(false)}>Volver al menú</button></div></div>}
     </main>
   );
