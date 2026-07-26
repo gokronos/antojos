@@ -6,7 +6,8 @@ type Product = { id: number; name: string; description: string; price: number; c
 type CartItem = Product & { qty: number };
 type Location = { id: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
-type ActiveOrder = { id:string; status:string; total:number; table:string; name:string; itemCount:number; items:string[] };
+type OrderLine = { name:string; qty:number; unitPrice:number };
+type ActiveOrder = { id:string; status:string; total:number; table:string; name:string; itemCount:number; lines:OrderLine[]; paid:boolean; expiresAt:number };
 
 const seed: Product[] = [
   { id: 1, name: "Burger de la casa", description: "Carne artesanal, queso, tocineta y salsa de la casa", price: 24900, category: "Hamburguesas", icon: "🍔", active: true },
@@ -58,14 +59,16 @@ export default function Home() {
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
   const [orders, setOrders] = useState([
-    { id: "1048", table: "Mesa 06", name: "Laura", total: 38900, status: "Nuevo", ago: "Hace 2 min", items:["1 Burger de la casa","2 Cerveza fría"], modified:false, updateNote:"" },
-    { id: "1047", table: "Mesa 02", name: "Carlos", total: 47800, status: "En preparación", ago: "Hace 7 min", items:["2 Perros especiales","1 Limonada"], modified:false, updateNote:"" },
-    { id: "1046", table: "Para llevar", name: "Valentina", total: 31900, status: "Entregado", ago: "Hace 14 min", items:["1 Papas explosivas","1 Cerveza fría"], modified:false, updateNote:"" },
+    { id: "1048", table: "Mesa 06", name: "Laura", total: 38900, status: "Nuevo", ago: "Hace 2 min", lines:[{name:"Burger de la casa",qty:1,unitPrice:24900},{name:"Cerveza fría",qty:2,unitPrice:7000}], paid:false, modified:false, updateNote:"" },
+    { id: "1047", table: "Mesa 02", name: "Carlos", total: 46800, status: "En preparación", ago: "Hace 7 min", lines:[{name:"Perro especial",qty:2,unitPrice:18900},{name:"Limonada de coco",qty:1,unitPrice:9000}], paid:false, modified:false, updateNote:"" },
+    { id: "1046", table: "Para llevar", name: "Valentina", total: 28900, status: "Entregado", ago: "Hace 14 min", lines:[{name:"Papas explosivas",qty:1,unitPrice:21900},{name:"Cerveza fría",qty:1,unitPrice:7000}], paid:true, modified:false, updateNote:"" },
   ]);
   const [editId, setEditId] = useState<number | null>(null);
   const [statusMenuId, setStatusMenuId] = useState<string | null>(null);
   const [productPhotos, setProductPhotos] = useState<Record<number,string[]>>({});
   const [activeOrder, setActiveOrder] = useState<ActiveOrder | null>(null);
+  const [orderDetailOpen, setOrderDetailOpen] = useState(true);
+  const [finishedOrderId, setFinishedOrderId] = useState("");
   const statusFlow = ["Nuevo", "Aceptado", "En preparación", "Entregado"];
   const statusIcon:Record<string,string> = {"Nuevo":"●","Aceptado":"✓","En preparación":"◴","Entregado":"✓"};
   const historyRows = [
@@ -82,10 +85,14 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", handler);
     const savedOrder = window.localStorage.getItem("mesa-lista-active-order");
     if(savedOrder) {
-      const parsed=JSON.parse(savedOrder) as ActiveOrder;
-      const restored={...parsed,items:parsed.items||[]};
-      setActiveOrder(restored);
-      setOrders(xs=>xs.some(o=>o.id===restored.id)?xs:[{id:restored.id,table:restored.table,name:restored.name,total:restored.total,status:restored.status,ago:"Pedido recuperado",items:restored.items,modified:false,updateNote:""},...xs]);
+      const parsed=JSON.parse(savedOrder) as ActiveOrder & {items?:string[]};
+      if(parsed.expiresAt && parsed.expiresAt <= Date.now()) window.localStorage.removeItem("mesa-lista-active-order");
+      else {
+        const legacyLines=(parsed.items||[]).map(item=>({name:item.replace(/^\d+\s+/,""),qty:Number(item.match(/^\d+/)?.[0]||1),unitPrice:0}));
+        const restored={...parsed,lines:parsed.lines||legacyLines,paid:parsed.paid||false,expiresAt:parsed.expiresAt||Date.now()+6*60*60*1000};
+        setActiveOrder(restored);
+        setOrders(xs=>xs.some(o=>o.id===restored.id)?xs:[{id:restored.id,table:restored.table,name:restored.name,total:restored.total,status:restored.status,ago:"Pedido recuperado",lines:restored.lines,paid:restored.paid,modified:false,updateNote:""},...xs]);
+      }
     }
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
@@ -93,6 +100,10 @@ export default function Home() {
     if(activeOrder) window.localStorage.setItem("mesa-lista-active-order",JSON.stringify(activeOrder));
     else window.localStorage.removeItem("mesa-lista-active-order");
   },[activeOrder]);
+  useEffect(()=>{
+    const timer=window.setInterval(()=>setActiveOrder(current=>current && current.expiresAt<=Date.now()?null:current),30000);
+    return()=>window.clearInterval(timer);
+  },[]);
 
   const categories = ["Todos", ...categoryList];
   const visible = products.filter(p => p.active && (category === "Todos" || p.category === category) && p.name.toLowerCase().includes(search.toLowerCase()));
@@ -107,16 +118,20 @@ export default function Home() {
     if (!name.trim() || (!cart.length && !activeOrder)) return;
     if(activeOrder){
       const additions=cart.map(x=>`${x.qty} ${x.name}`);
+      const newLines=cart.map(x=>({name:x.name,qty:x.qty,unitPrice:x.price}));
       const locationChanged=table!==activeOrder.table;
       const changes=[additions.length?`Agregó: ${additions.join(", ")}`:"",locationChanged?`Cambió ubicación: ${activeOrder.table} → ${table}`:""].filter(Boolean).join(" · ");
-      const updated={...activeOrder,table,name,total:activeOrder.total+total,itemCount:activeOrder.itemCount+count,items:[...(activeOrder.items||[]),...additions]};
+      const merged=activeOrder.lines.map(line=>({...line}));
+      newLines.forEach(line=>{const found=merged.find(x=>x.name===line.name&&x.unitPrice===line.unitPrice);if(found)found.qty+=line.qty;else merged.push(line)});
+      const updated={...activeOrder,table,name,total:activeOrder.total+total,itemCount:activeOrder.itemCount+count,lines:merged,paid:false};
       setActiveOrder(updated);
-      setOrders(xs=>xs.map(o=>o.id===activeOrder.id?{...o,table,name,total:updated.total,items:updated.items,modified:true,updateNote:changes||"El cliente actualizó los datos del pedido",ago:"Modificado ahora"}:o));
+      setOrders(xs=>xs.map(o=>o.id===activeOrder.id?{...o,table,name,total:updated.total,lines:updated.lines,paid:false,modified:true,updateNote:changes||"El cliente actualizó los datos del pedido",ago:"Modificado ahora"}:o));
     } else {
       const id="1052";
-      const items=cart.map(x=>`${x.qty} ${x.name}`);
-      setActiveOrder({id,status:"Nuevo",total,table,name,itemCount:count,items});
-      setOrders(o => [{ id, table, name, total, status: "Nuevo", ago: "Ahora",items,modified:false,updateNote:"" }, ...o]);
+      const lines=cart.map(x=>({name:x.name,qty:x.qty,unitPrice:x.price}));
+      const expiresAt=Date.now()+6*60*60*1000;
+      setActiveOrder({id,status:"Nuevo",total,table,name,itemCount:count,lines,paid:false,expiresAt});
+      setOrders(o => [{ id, table, name, total, status: "Nuevo", ago: "Ahora",lines,paid:false,modified:false,updateNote:"" }, ...o]);
     }
     setCheckout(false); setSuccess(true); setCart([]);
   };
@@ -124,7 +139,15 @@ export default function Home() {
     setOrders(xs=>xs.map(o=>o.id===id?{...o,status}:o));
     setActiveOrder(current=>current?.id===id?{...current,status}:current);
   };
-  const filteredOrders = orders.filter(o=>orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter);
+  const setOrderPaid = (id:string,paid:boolean) => {
+    setOrders(xs=>xs.map(o=>o.id===id?{...o,paid}:o));
+    setActiveOrder(current=>current?.id===id?{...current,paid}:current);
+  };
+  const finishCustomerOrder=()=>{
+    if(!activeOrder || activeOrder.status!=="Entregado" || !activeOrder.paid)return;
+    setFinishedOrderId(activeOrder.id);setActiveOrder(null);setOrderDetailOpen(false);
+  };
+  const filteredOrders = orders.filter(o=>orderFilter==="Modificados" ? o.modified : orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter);
   const openAdmin = () => authenticated ? setMode("admin") : setLoginOpen(true);
   const signIn = () => {
     if(!loginUser.trim() || !loginPassword.trim())return;
@@ -154,11 +177,11 @@ export default function Home() {
           <article><span>Ticket promedio</span><strong>$27.016</strong><em>6 mesas activas</em></article>
         </div>
         {orders.some(o=>o.modified)&&<div className="change-alert"><span>!</span><div><strong>{orders.filter(o=>o.modified).length} pedido modificado</strong><p>Revise los productos o la ubicación que el cliente actualizó.</p></div><button onClick={()=>setOrders(xs=>xs.map(o=>({...o,modified:false})))}>Marcar como revisado</button></div>}
-        <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Los pedidos más recientes y modificados aparecen primero</p></div><div className="order-filters">{["Activos","Nuevo","Aceptado","En preparación","Entregado","Todos"].map(f=><button className={orderFilter===f?"active":""} onClick={()=>setOrderFilter(f)} key={f}>{f}</button>)}</div></div>
+        <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Los pedidos más recientes y modificados aparecen primero</p></div><div className="order-filters">{["Activos","Modificados","Nuevo","Aceptado","En preparación","Entregado","Todos"].map(f=><button className={orderFilter===f?"active":""} onClick={()=>setOrderFilter(f)} key={f}>{f==="Modificados"?"Pedidos modificados":f}</button>)}</div></div>
         <div className="orders">
           {filteredOrders.map((o, i) => <article className={`order ${i === 0 && o.status==="Nuevo" ? "urgent" : ""}`} key={o.id}>
-            <div className="order-main"><div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong>{o.modified&&<b className="modified-badge">Modificado</b>}</div><small>{o.ago}</small></div><h3>{o.name}</h3><div className="order-items">{o.items.map((item,index)=><span key={`${item}-${index}`}>{item}</span>)}</div>{o.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{o.updateNote}</span></div>}</div>
-            <div className="order-side"><strong className="order-total">{money(o.total)}</strong><div className="status-control"><button className={`status-trigger status-${statusFlow.indexOf(o.status)}`} onClick={()=>setStatusMenuId(statusMenuId===o.id?null:o.id)}><i>{statusIcon[o.status]}</i><span><small>Estado del pedido</small>{o.status}</span><b>⌄</b></button>{statusMenuId===o.id&&<div className="status-menu"><strong>Cambiar estado</strong>{statusFlow.map(s=><button className={o.status===s?"selected":""} onClick={()=>{setOrderStatus(o.id,s);setStatusMenuId(null)}} key={s}><i>{statusIcon[s]}</i><span>{s}<small>{s==="Nuevo"?"Pedido recién recibido":s==="Aceptado"?"Confirmado por el local":s==="En preparación"?"Se está preparando":"Pedido finalizado"}</small></span>{o.status===s&&<b>✓</b>}</button>)}</div>}</div></div>
+            <div className="order-main"><div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong>{o.modified&&<b className="modified-badge">Modificado</b>}</div><small>{o.ago}</small></div><h3>{o.name}</h3><div className="order-lines"><div className="line-head"><span>Producto</span><span>Precio</span><span>Subtotal</span></div>{o.lines.map((line,index)=><div className="line-row" key={`${line.name}-${index}`}><span><b>{line.qty}×</b> {line.name}</span><span>{money(line.unitPrice)}</span><strong>{money(line.qty*line.unitPrice)}</strong></div>)}</div>{o.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{o.updateNote}</span></div>}</div>
+            <div className="order-side"><div className="charge-total"><small>Total para cobrar</small><strong className="order-total">{money(o.total)}</strong><button className={`paid-button ${o.paid?"paid":""}`} onClick={()=>setOrderPaid(o.id,!o.paid)}>{o.paid?"✓ Pedido cobrado":"Marcar como cobrado"}</button></div><div className="status-control"><button className={`status-trigger status-${statusFlow.indexOf(o.status)}`} onClick={()=>setStatusMenuId(statusMenuId===o.id?null:o.id)}><i>{statusIcon[o.status]}</i><span><small>Estado del pedido</small>{o.status}</span><b>⌄</b></button>{statusMenuId===o.id&&<div className="status-menu"><strong>Cambiar estado</strong>{statusFlow.map(s=><button className={o.status===s?"selected":""} onClick={()=>{setOrderStatus(o.id,s);setStatusMenuId(null)}} key={s}><i>{statusIcon[s]}</i><span>{s}<small>{s==="Nuevo"?"Pedido recién recibido":s==="Aceptado"?"Confirmado por el local":s==="En preparación"?"Se está preparando":"Entregado al cliente"}</small></span>{o.status===s&&<b>✓</b>}</button>)}</div>}</div></div>
           </article>)}
           {!filteredOrders.length&&<div className="empty-state">No hay pedidos con este estado.</div>}
         </div></>}
@@ -200,7 +223,8 @@ export default function Home() {
   return (
     <main className="customer">
       <header className="menu-head"><div className="brand light"><span>ML</span><div>Mesa Lista<small>Comida que provoca</small></div></div><button onClick={openAdmin} className="admin-link">Ingreso del personal</button><button className="bag" onClick={()=>setCartOpen(true)}>🛍️ <b>{count}</b></button></header>
-      {activeOrder&&<section className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.status}</strong><p>{activeOrder.itemCount} productos · {activeOrder.table} · {money(activeOrder.total)}</p></div></div><div className="order-progress">{statusFlow.map((s,i)=><span className={statusFlow.indexOf(activeOrder.status)>=i?"done":""} key={s}><i>{statusIcon[s]}</i><small>{s}</small></span>)}</div><div className="active-actions"><button onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar productos</button><button onClick={()=>{setName(activeOrder.name);setTable(activeOrder.table);setCheckout(true)}}>✎ Cambiar ubicación</button></div></section>}
+      {finishedOrderId&&<div className="finished-banner">✓ Pedido #{finishedOrderId} finalizado. Gracias por su compra.</div>}
+      {activeOrder&&<section className="active-order-wrap"><div className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.status}{activeOrder.paid?" · Cobrado":""}</strong><p>{activeOrder.itemCount} productos · {activeOrder.table} · {money(activeOrder.total)} · vence en 6 horas</p></div></div><div className="order-progress">{statusFlow.map((s,i)=><span className={statusFlow.indexOf(activeOrder.status)>=i?"done":""} key={s}><i>{statusIcon[s]}</i><small>{s}</small></span>)}</div><div className="active-actions"><button onClick={()=>setOrderDetailOpen(v=>!v)}>{orderDetailOpen?"Ocultar detalle":"Ver mi pedido"}</button><button onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar</button><button onClick={()=>{setName(activeOrder.name);setTable(activeOrder.table);setCheckout(true)}}>✎ Ubicación</button></div></div>{orderDetailOpen&&<div className="customer-order-detail"><div className="customer-detail-head"><div><small>SU CUENTA</small><h3>Detalle del pedido</h3></div><span>{activeOrder.paid?"✓ Pagado":"Pago pendiente"}</span></div>{activeOrder.lines.map((line,index)=><div className="customer-line" key={`${line.name}-${index}`}><span><b>{line.qty}×</b> {line.name}<small>{money(line.unitPrice)} cada uno</small></span><strong>{money(line.qty*line.unitPrice)}</strong></div>)}<div className="customer-total"><span>Total</span><strong>{money(activeOrder.total)}</strong></div>{activeOrder.status==="Entregado"&&activeOrder.paid?<button className="finish-order" onClick={finishCustomerOrder}>Confirmar recibido y finalizar</button>:<p className="finish-help">Podrá finalizar cuando el local marque el pedido como entregado y cobrado. Mientras esté en preparación no se puede cancelar.</p>}</div>}</section>}
       <section className="hero">
         <div><span className="eyebrow">BIENVENIDOS · {table.toUpperCase()}</span><h1>¿Qué se le antoja<br/>comer hoy?</h1><p>Prepare su pedido desde su lugar. Nosotros nos encargamos del resto.</p></div>
         <div className="hero-dish"><span>🍔</span><i>100%<br/><small>artesanal</small></i></div>
