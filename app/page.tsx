@@ -32,6 +32,8 @@ export default function Home() {
   const [historyPeriod, setHistoryPeriod] = useState<"Día"|"Semana"|"Quincena"|"Mes">("Día");
   const [adminSection, setAdminSection] = useState<"orders"|"menu"|"history"|"locations"|"users"|"branding"|"settings">("orders");
   const [orderFilter, setOrderFilter] = useState("Activos");
+  const [locationFilter, setLocationFilter] = useState("Todas las ubicaciones");
+  const [modifiedOnly, setModifiedOnly] = useState(false);
   const [categoryList, setCategoryList] = useState(["Hamburguesas","Perros","Para compartir","Bebidas"]);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [newCategory, setNewCategory] = useState("");
@@ -104,7 +106,10 @@ export default function Home() {
         const legacyLines=(parsed.items||[]).map(item=>({name:item.replace(/^\d+\s+/,""),qty:Number(item.match(/^\d+/)?.[0]||1),unitPrice:0}));
         const restored={...parsed,lines:parsed.lines||legacyLines,paid:parsed.paid||false,expiresAt:parsed.expiresAt||Date.now()+6*60*60*1000};
         setActiveOrder(restored);
-        setOrders(xs=>xs.some(o=>o.id===restored.id)?xs:[{id:restored.id,table:restored.table,name:restored.name,total:restored.total,status:restored.status,ago:"Pedido recuperado",lines:restored.lines,paid:restored.paid,modified:false,updateNote:""},...xs]);
+        setOrders(xs=>{
+          const recovered={id:restored.id,table:restored.table,name:restored.name,total:restored.total,status:restored.status,ago:"Pedido recuperado",lines:restored.lines,paid:restored.paid,modified:false,updateNote:""};
+          return [recovered,...xs.filter(o=>o.id!==restored.id)];
+        });
       }
     }
     return () => window.removeEventListener("beforeinstallprompt", handler);
@@ -140,13 +145,17 @@ export default function Home() {
       newLines.forEach(line=>{const found=merged.find(x=>x.name===line.name&&x.unitPrice===line.unitPrice);if(found)found.qty+=line.qty;else merged.push(line)});
       const updated={...activeOrder,table,name,total:activeOrder.total+total,itemCount:activeOrder.itemCount+count,lines:merged,paid:false};
       setActiveOrder(updated);
-      setOrders(xs=>xs.map(o=>o.id===activeOrder.id?{...o,table,name,total:updated.total,lines:updated.lines,paid:false,modified:true,updateNote:changes||"El cliente actualizó los datos del pedido",ago:"Modificado ahora"}:o));
+      setOrders(xs=>{
+        const previous=xs.find(o=>o.id===activeOrder.id);
+        const changed={...(previous||{id:activeOrder.id,status:activeOrder.status}),table,name,total:updated.total,lines:updated.lines,paid:false,modified:true,updateNote:changes||"El cliente actualizó los datos del pedido",ago:"Modificado ahora"};
+        return [changed,...xs.filter(o=>o.id!==activeOrder.id)];
+      });
     } else {
-      const id="1052";
+      const id=String(Date.now()).slice(-6);
       const lines=cart.map(x=>({name:x.name,qty:x.qty,unitPrice:x.price}));
       const expiresAt=Date.now()+6*60*60*1000;
       setActiveOrder({id,status:"Nuevo",total,table,name,itemCount:count,lines,paid:false,expiresAt});
-      setOrders(o => [{ id, table, name, total, status: "Nuevo", ago: "Ahora",lines,paid:false,modified:false,updateNote:"" }, ...o]);
+      setOrders(o => [{ id, table, name, total, status: "Nuevo", ago: "Ahora",lines,paid:false,modified:false,updateNote:"" }, ...o.filter(existing=>existing.id!==id)]);
     }
     setCheckout(false); setSuccess(true); setCart([]);
   };
@@ -162,7 +171,12 @@ export default function Home() {
     if(!activeOrder || activeOrder.status!=="Entregado" || !activeOrder.paid)return;
     setFinishedOrderId(activeOrder.id);setActiveOrder(null);setOrderDetailOpen(false);
   };
-  const filteredOrders = orders.filter(o=>orderFilter==="Modificados" ? o.modified : orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter);
+  const uniqueOrders=orders.filter((order,index,list)=>list.findIndex(item=>item.id===order.id)===index);
+  const filteredOrders = uniqueOrders
+    .filter(o=>orderFilter==="Todos" || orderFilter==="Activos" ? (orderFilter==="Todos" || o.status!=="Entregado") : o.status===orderFilter)
+    .filter(o=>locationFilter==="Todas las ubicaciones" || o.table===locationFilter)
+    .filter(o=>!modifiedOnly || o.modified)
+    .sort((a,b)=>Number(b.modified)-Number(a.modified));
   const openAdmin = () => authenticated ? setMode("admin") : setLoginOpen(true);
   const signIn = () => {
     if(!loginUser.trim() || !loginPassword.trim())return;
@@ -196,8 +210,8 @@ export default function Home() {
           <article><span>Ventas hoy</span><strong>$486.300</strong><em>↑ 8% frente a ayer</em></article>
           <article><span>Ticket promedio</span><strong>$27.016</strong><em>6 mesas activas</em></article>
         </div>
-        {orders.some(o=>o.modified)&&<div className="change-alert"><span>!</span><div><strong>{orders.filter(o=>o.modified).length} pedido modificado</strong><p>Revise los productos o la ubicación que el cliente actualizó.</p></div><button onClick={()=>setOrders(xs=>xs.map(o=>({...o,modified:false})))}>Marcar como revisado</button></div>}
-        <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Los pedidos más recientes y modificados aparecen primero</p></div><div className="order-filters">{["Activos","Modificados","Nuevo","Aceptado","En preparación","Entregado","Todos"].map(f=><button className={orderFilter===f?"active":""} onClick={()=>setOrderFilter(f)} key={f}>{f==="Modificados"?"Pedidos modificados":f}</button>)}</div></div>
+        {uniqueOrders.some(o=>o.modified)&&<div className="change-alert"><span>!</span><div><strong>{uniqueOrders.filter(o=>o.modified).length} pedido modificado</strong><p>El pedido original fue actualizado y aparece primero; no se creó una copia.</p></div><button onClick={()=>setOrders(xs=>xs.map(o=>({...o,modified:false})))}>Marcar como revisado</button></div>}
+        <div className="section-title order-title"><div><h2>Pedidos en vivo</h2><p>Un pedido por tarjeta; las modificaciones actualizan el original</p></div><div className="compact-filters"><label><span>Estado</span><select value={orderFilter} onChange={e=>setOrderFilter(e.target.value)}><option>Activos</option><option>Nuevo</option><option>Aceptado</option><option>En preparación</option><option>Entregado</option><option>Todos</option></select></label><label><span>Mesa o ubicación</span><select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)}><option>Todas las ubicaciones</option>{Array.from(new Set([...locations.map(l=>l.name),...uniqueOrders.map(o=>o.table)])).map(place=><option key={place}>{place}</option>)}</select></label><button className={modifiedOnly?"active":""} onClick={()=>setModifiedOnly(v=>!v)}><i>{modifiedOnly?"✓":"↻"}</i><span><b>Solo modificados</b><small>{uniqueOrders.filter(o=>o.modified).length} pendientes de revisión</small></span></button>{(orderFilter!=="Activos"||locationFilter!=="Todas las ubicaciones"||modifiedOnly)&&<button className="clear-filters" onClick={()=>{setOrderFilter("Activos");setLocationFilter("Todas las ubicaciones");setModifiedOnly(false)}}>Limpiar</button>}</div></div>
         <div className="orders">
           {filteredOrders.map((o, i) => <article className={`order ${i === 0 && o.status==="Nuevo" ? "urgent" : ""}`} key={o.id}>
             <div className="order-main"><div className="order-head"><div><span>#{o.id}</span><strong>{o.table}</strong>{o.modified&&<b className="modified-badge">Modificado</b>}</div><small>{o.ago}</small></div><h3>{o.name}</h3><div className="order-lines"><div className="line-head"><span>Producto</span><span>Precio</span><span>Subtotal</span></div>{o.lines.map((line,index)=><div className="line-row" key={`${line.name}-${index}`}><span><b>{line.qty}×</b> {line.name}</span><span>{money(line.unitPrice)}</span><strong>{money(line.qty*line.unitPrice)}</strong></div>)}</div>{o.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{o.updateNote}</span></div>}</div>
