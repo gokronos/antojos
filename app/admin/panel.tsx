@@ -23,6 +23,7 @@ type ManualOrder = { customerName: string; locationId: number; notes: string; it
 const money = (value: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(value);
 const statuses: OrderStatus[] = ["Nuevo", "Aceptado", "En preparación", "Entregado", "Cancelado"];
 const periods = [{days:1,label:"Hoy"},{days:7,label:"7 días"},{days:15,label:"15 días"},{days:30,label:"30 días"}] as const;
+const productIcons=["🍔","🌭","🍕","🍗","🥩","🍟","🌮","🌯","🥪","🥗","🍝","🍜","🍚","🍲","🍰","🍩","🍦","🥤","☕","🍺","🍽️"];
 const ago = (date: string) => {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   if (minutes < 1) return "Ahora";
@@ -144,13 +145,13 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
     <aside className="sidebar">
       <div className="brand"><span>ML</span><div>{data?.settings.name ?? "Mesa Lista"}<small>Panel del local</small></div></div>
       <nav>
-        <button className={section === "orders" ? "active" : ""} onClick={() => setSection("orders")}>▦ <span>Pedidos</span><b>{activeOrders.filter((order) => order.status === "Nuevo").length}</b></button>
-        {canManage&&<button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>◫ <span>Productos</span></button>}
-        {canManage&&<button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}>⌁ <span>Mesas y barra</span></button>}
-        {canSeeHistory&&<button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}>◷ <span>Historial</span></button>}
-        {["Superadministrador","Propietario"].includes(session.role)&&<button className={section === "users" ? "active" : ""} onClick={() => setSection("users")}>♙ <span>Usuarios</span></button>}
-        {canManage&&<button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}>✦ <span>Diseño y negocio</span></button>}
-        {canManage&&<button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>⚙ <span>Configuración</span></button>}
+        <button className={section === "orders" ? "active" : ""} onClick={() => setSection("orders")}><i>🧾</i><span>Pedidos</span><b>{activeOrders.filter((order) => order.status === "Nuevo").length}</b></button>
+        {canManage&&<button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}><i>🍽️</i><span>Productos</span></button>}
+        {canManage&&<button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}><i>📍</i><span>Mesas</span></button>}
+        {canSeeHistory&&<button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}><i>📊</i><span>Historial</span></button>}
+        {["Superadministrador","Propietario"].includes(session.role)&&<button className={section === "users" ? "active" : ""} onClick={() => setSection("users")}><i>👥</i><span>Usuarios</span></button>}
+        {canManage&&<button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}><i>🎨</i><span>Diseño</span></button>}
+        {canManage&&<button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}><i>⚙️</i><span>Ajustes</span></button>}
       </nav>
       <Link className="view-menu" href="/">Ver menú del cliente ↗</Link>
     </aside>
@@ -278,7 +279,7 @@ function ProductModal({ product, categories, saving, onChange, onClose, onSave }
     <label>Nombre<input required value={product.name} onChange={(event) => onChange({ ...product, name: event.target.value })} /></label>
     <label>Descripción<textarea value={product.description} onChange={(event) => onChange({ ...product, description: event.target.value })} /></label>
     <div className="form-row"><label>Precio<input required min="0" type="number" value={product.price} onChange={(event) => onChange({ ...product, price: Number(event.target.value) })} /></label><label>Categoría<select required value={product.category} onChange={(event) => onChange({ ...product, category: event.target.value })}>{categories.map((category)=><option key={category.id}>{category.name}</option>)}</select></label></div>
-    <label>Icono<input value={product.icon} onChange={(event) => onChange({ ...product, icon: event.target.value })} /></label>
+    <label>Icono del producto<div className="icon-picker">{productIcons.map(icon=><button type="button" className={product.icon===icon?"selected":""} onClick={()=>onChange({...product,icon})} key={icon}>{icon}</button>)}</div><div className="custom-icon"><span>Otro:</span><input value={product.icon} maxLength={12} onChange={(event) => onChange({ ...product, icon: event.target.value })} /></div></label>
     <button className="save" disabled={saving}>{saving ? "Guardando…" : "Guardar producto"}</button>
   </form></div>;
 }
