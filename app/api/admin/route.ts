@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { acknowledgeOrderChanges, adminData, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, deleteOrder, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
+import { acknowledgeOrderChanges, adminData, attendServiceRequest, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, deleteOrder, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
 import { getAdminSession } from "../../../lib/admin-auth";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (!session) return unauthorized();
   try {
     const body = await request.json() as { action: string; data: Record<string, unknown> };
-    const operational=["orderStatus","orderPaid","acknowledgeOrder","createOrder"];
+    const operational=["orderStatus","orderPaid","acknowledgeOrder","createOrder","attendServiceRequest"];
     if(session.role==="Cocina"&&!["orderStatus","acknowledgeOrder"].includes(body.action))return unauthorized();
     if(session.role==="Caja"&&!operational.includes(body.action))return unauthorized();
     if(["saveAdminUser","deleteAdminUser"].includes(body.action)&&!["Superadministrador","Propietario"].includes(session.role))return unauthorized();
@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     else if (body.action === "saveAdminUser") await saveAdminUser(body.data as never);
     else if (body.action === "deleteAdminUser") await deleteAdminUser(Number(body.data.id));
     else if (body.action === "deleteOrder") await deleteOrder(Number(body.data.id));
+    else if (body.action === "attendServiceRequest") await attendServiceRequest(Number(body.data.id));
     else return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
     return NextResponse.json({ ok: true });
   } catch (error) {

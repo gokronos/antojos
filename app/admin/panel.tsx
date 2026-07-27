@@ -15,7 +15,8 @@ type Category = { id:number; name:string; position:number };
 type AdminRole="Superadministrador"|"Propietario"|"Administrador"|"Caja"|"Cocina";
 type AdminSession={id:number;name:string;username:string;role:AdminRole;expires:number};
 type AdminUser={id?:number;name:string;username:string;role:AdminRole;active:boolean;password?:string;createdAt?:string};
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[];users:AdminUser[] };
+type ServiceRequest={id:number;locationId:number;locationName:string;customerName:string;requestType:string;note:string;status:"Pendiente"|"Atendida";createdAt:string;attendedAt:string|null};
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; serviceRequests:ServiceRequest[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[];users:AdminUser[] };
 type Section = "orders" | "products" | "locations" | "history" | "users" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
@@ -126,6 +127,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
   }
 
   const activeOrders = useMemo(() => data?.orders.filter((order) => !["Entregado", "Cancelado"].includes(order.status)) ?? [], [data]);
+  const pendingServiceRequests=useMemo(()=>data?.serviceRequests.filter(request=>request.status==="Pendiente")??[],[data]);
   const history = useMemo(() => data?.orders.filter((order) => ["Entregado", "Cancelado"].includes(order.status)) ?? [], [data]);
   const filteredOrders=useMemo(()=>data?.orders
     .filter(order=>orderFilter==="Todos"||(orderFilter==="Activos"?!["Entregado","Cancelado"].includes(order.status):order.status===orderFilter))
@@ -169,6 +171,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
       {notice && <div className="system-message success-message">{notice}</div>}
       {!data ? <div className="system-message">Cargando pedidos y menú…</div> : <>
         {section === "orders" && <>
+          {session.role!=="Cocina"&&pendingServiceRequests.length>0&&<section className="service-alerts"><div className="service-alert-head"><div><span>🔔</span><div><h2>Solicitudes de atención</h2><p>{pendingServiceRequests.length} mesa{pendingServiceRequests.length===1?" necesita":"s necesitan"} ayuda</p></div></div><b>{pendingServiceRequests.length} pendiente{pendingServiceRequests.length===1?"":"s"}</b></div><div className="service-request-grid">{pendingServiceRequests.map(request=><article key={request.id}><div className="service-request-top"><strong>{request.locationName}</strong><small>{ago(request.createdAt)}</small></div><h3>{request.requestType}</h3>{request.customerName&&<p>Cliente: {request.customerName}</p>}{request.note&&<blockquote>{request.note}</blockquote>}<button disabled={saving} onClick={()=>action("attendServiceRequest",{id:request.id},"Solicitud marcada como atendida.")}>✓ Marcar atendida</button></article>)}</div></section>}
           <div className="stats-period"><div><strong>Resumen de ventas</strong><small>Zona horaria de Colombia</small></div><div className="period-tabs">{periods.map(period=><button className={periodDays===period.days?"active":""} onClick={()=>setPeriodDays(period.days)} key={period.days}>{period.label}</button>)}</div></div>
           <div className="stats">
             <article><span>Pedidos · {periodLabel}</span><strong>{data.stats.count}</strong><em>{activeOrders.length} pedidos activos ahora</em></article>

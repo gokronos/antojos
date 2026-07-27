@@ -12,8 +12,16 @@ type Banner = { id:number; eyebrow:string; title:string; text:string; image:stri
 type ScheduleDay = { weekday:number; day:string; openTime:string; closeTime:string; enabled:boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ActiveOrder = { id:number; locationId:number; locationName:string; customerName:string; notes:string; total:number; status:"Nuevo"|"Aceptado"|"En preparación"|"Entregado"; paid:boolean; items:{productId:number;productName:string;unitPrice:number;quantity:number}[] };
+type ServiceRequestType = "Llamar al mesero" | "Pedir la cuenta" | "Cubiertos o servilletas" | "Reportar un inconveniente" | "Otra solicitud";
 
 const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
+const serviceOptions:{type:ServiceRequestType;icon:string;help:string}[]=[
+  {type:"Llamar al mesero",icon:"🙋",help:"Necesito atención en la mesa"},
+  {type:"Pedir la cuenta",icon:"🧾",help:"Quiero solicitar la cuenta"},
+  {type:"Cubiertos o servilletas",icon:"🍴",help:"Necesito elementos para la mesa"},
+  {type:"Reportar un inconveniente",icon:"⚠️",help:"Algo requiere atención"},
+  {type:"Otra solicitud",icon:"💬",help:"Quiero escribir otra necesidad"},
+];
 
 export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -37,6 +45,10 @@ export default function Home() {
   const [, setInstallPrompt] = useState<InstallPrompt | null>(null);
   const [activeOrder,setActiveOrder]=useState<ActiveOrder|null>(null);
   const [orderDetailOpen,setOrderDetailOpen]=useState(false);
+  const [serviceOpen,setServiceOpen]=useState(false);
+  const [serviceType,setServiceType]=useState<ServiceRequestType|null>(null);
+  const [serviceNote,setServiceNote]=useState("");
+  const [serviceSent,setServiceSent]=useState("");
 
   useEffect(() => {
     fetch("/api/menu", { cache: "no-store" })
@@ -158,6 +170,22 @@ export default function Home() {
     setActiveOrder(null);setOrderDetailOpen(false);setName("");
   }
 
+  async function submitServiceRequest() {
+    if(!locationId||!serviceType)return;
+    setSending(true);setError("");
+    try {
+      const response=await fetch("/api/service-requests",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        locationId,customerName:name,requestType:serviceType,note:serviceNote,
+      })});
+      const result=await response.json();
+      if(!response.ok)throw new Error(result.error);
+      setServiceSent(`${serviceType} · ${result.locationName}`);
+      setServiceType(null);setServiceNote("");setServiceOpen(false);
+    } catch(cause) {
+      setError(cause instanceof Error?cause.message:"No fue posible solicitar atención.");
+    } finally {setSending(false);}
+  }
+
   return (
     <main className="customer" style={themeStyle}>
       <header className="menu-head">
@@ -181,13 +209,16 @@ export default function Home() {
         </>}
       </section>
       <footer className="business-footer"><div className="brand">{settings.logo?<img src={settings.logo} alt={settings.name}/>:<span>{settings.name.slice(0,2).toUpperCase()}</span>}<div>{settings.name}<small>{settings.tagline}</small></div></div><div className="footer-hours"><b>Horario de hoy</b><span>{todaySchedule?.enabled?`${todaySchedule.day}: ${todaySchedule.openTime} – ${todaySchedule.closeTime}`:`${todaySchedule?.day??"Hoy"}: Cerrado`}</span></div><div>{settings.address&&<span>⌖ {settings.address}</span>}{settings.phone&&<a href={`tel:${settings.phone.replace(/\s/g,"")}`}>☎ {settings.phone}</a>}{settings.whatsapp&&<a href={`https://wa.me/${settings.whatsapp}`} target="_blank" rel="noreferrer">WhatsApp</a>}{settings.mapUrl&&<a href={settings.mapUrl} target="_blank" rel="noreferrer">Ver ubicación ↗</a>}</div></footer>
+      {location&&!(location.type==="Otro"&&location.name.toLowerCase().includes("llevar"))&&<button className={`service-button ${count>0?"with-cart":""}`} onClick={()=>{setError("");setServiceOpen(true)}}><span>🔔</span><b>Solicitar atención</b></button>}
       {count > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}><span><b>{count}</b> Ver pedido</span><strong>{money(total)}</strong></button>}
       {cartOpen && <div className="drawer-back" onClick={() => setCartOpen(false)}><aside className="cart" onClick={(e) => e.stopPropagation()}><button className="close" onClick={() => setCartOpen(false)}>×</button><span className="eyebrow">SU PEDIDO</span><h2>Todo listo para ordenar</h2><p className="table-tag">📍 {location?.name ?? "Sin ubicación"}</p>
         <div className="cart-items">{cart.map((item) => <div key={item.id}><span>{item.icon}</span><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => changeQty(item.id, -1)}>−</button><b>{item.qty}</b><button onClick={() => changeQty(item.id, 1)}>＋</button></div></div>)}</div>
-        <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length || !settings.acceptingOrders} onClick={() => { setCartOpen(false); setCheckout(true); }}>{settings.acceptingOrders ? "Continuar pedido →" : "Pedidos pausados"}</button>
+        <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length || !settings.acceptingOrders} onClick={() => { setCartOpen(false); setCheckout(true); }}>{settings.acceptingOrders ? "Revisar y ordenar →" : "Pedidos pausados"}</button>
       </aside></div>}
-      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea agregar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Los productos nuevos o el cambio de ubicación se guardarán en el mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>¿Dónde está?<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>{activeOrder?"Alerta de modificación":"Alerta al local"}</strong><small>{activeOrder?"El pedido original se actualizará sin crear una copia":"El pedido aparecerá inmediatamente en el panel"}</small></div></div><button className="checkout-btn" disabled={!name.trim() || sending || !locationId || (!activeOrder&&!cart.length)} onClick={submitOrder}>{sending ? "Enviando…" : `${activeOrder?"Actualizar":"Enviar"} pedido · ${money((activeOrder?.total??0)+total)}`}</button></div></div>}
+      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea agregar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Los productos nuevos o el cambio de ubicación se guardarán en el mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>Mesa o lugar de entrega<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>{activeOrder?"Alerta de modificación":"Alerta al local"}</strong><small>{activeOrder?"El pedido original se actualizará sin crear una copia":"El pedido aparecerá inmediatamente en el panel"}</small></div></div><button className="checkout-btn" disabled={!name.trim() || sending || !locationId || (!activeOrder&&!cart.length)} onClick={submitOrder}>{sending ? "Enviando…" : `${activeOrder?"Actualizar":"Enviar"} pedido · ${money((activeOrder?.total??0)+total)}`}</button></div></div>}
+      {serviceOpen&&<div className="modal-back"><div className="checkout-modal service-modal"><button className="close" onClick={()=>{setServiceOpen(false);setServiceType(null);setError("")}}>×</button><span className="eyebrow">ATENCIÓN EN SU MESA</span><h2>¿En qué podemos ayudarle?</h2><p>Enviaremos una alerta al personal para <b>{location?.name}</b>.</p><div className="service-options">{serviceOptions.map(option=><button className={serviceType===option.type?"selected":""} onClick={()=>setServiceType(option.type)} key={option.type}><span>{option.icon}</span><div><strong>{option.type}</strong><small>{option.help}</small></div><i>{serviceType===option.type?"✓":"›"}</i></button>)}</div>{serviceType&&<label>Detalle opcional<textarea value={serviceNote} onChange={event=>setServiceNote(event.target.value)} maxLength={300} placeholder={serviceType==="Otra solicitud"?"Cuéntenos qué necesita...":"Puede agregar una indicación..."}/></label>}{error&&<div className="form-error">{error}</div>}<button className="checkout-btn" disabled={!serviceType||sending} onClick={submitServiceRequest}>{sending?"Enviando…":"Enviar solicitud"}</button></div></div>}
       {success && <div className="modal-back"><div className="success"><span>✓</span><h2>{activeOrder?"¡Pedido actualizado!":"¡Pedido recibido!"}</h2><p>{activeOrder?"El local recibió los cambios en el mismo pedido.":"El pedido ya apareció en el panel del local."}</p><b>Pedido #{success.id} · {success.locationName}</b><button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
+      {serviceSent&&<div className="modal-back"><div className="success service-success"><span>🔔</span><h2>Solicitud enviada</h2><p>El personal recibió la alerta y se acercará tan pronto como sea posible.</p><b>{serviceSent}</b><button onClick={()=>setServiceSent("")}>Entendido</button></div></div>}
     </main>
   );
 }

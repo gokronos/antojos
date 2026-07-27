@@ -40,6 +40,7 @@ export type BannerRecord = { id?: number; eyebrow: string; title: string; text: 
 export type ScheduleRecord = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
 export type AdminRole = "Superadministrador" | "Propietario" | "Administrador" | "Caja" | "Cocina";
 export type AdminUserRecord = { id:number; name:string; username:string; role:AdminRole; active:boolean; createdAt:string };
+export type ServiceRequestType = "Llamar al mesero" | "Pedir la cuenta" | "Cubiertos o servilletas" | "Reportar un inconveniente" | "Otra solicitud";
 
 const initialProducts = [
   ["Burger de la casa", "Carne artesanal, queso, tocineta y salsa de la casa", 24900, "Hamburguesas", "🍔"],
@@ -108,6 +109,14 @@ export async function ensureDatabase() {
         product_id BIGINT NOT NULL, product_name TEXT NOT NULL,
         unit_price INTEGER NOT NULL, quantity INTEGER NOT NULL CHECK (quantity > 0)
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS service_requests (
+        id BIGSERIAL PRIMARY KEY, location_id BIGINT REFERENCES locations(id),
+        location_name TEXT NOT NULL, customer_name TEXT NOT NULL DEFAULT '',
+        request_type TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'Pendiente' CHECK (status IN ('Pendiente','Atendida')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), attended_at TIMESTAMPTZ
+      )`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_service_requests_created ON service_requests(created_at DESC)`;
       await sql`CREATE TABLE IF NOT EXISTS restaurant_settings (
         id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
         name TEXT NOT NULL DEFAULT 'Mesa Lista',
@@ -306,15 +315,45 @@ export async function closeCustomerOrder(token:string) {
   if(!result.length) throw new Error("El pedido solo puede finalizar cuando esté entregado y cobrado.");
 }
 
+const serviceRequestTypes:ServiceRequestType[]=["Llamar al mesero","Pedir la cuenta","Cubiertos o servilletas","Reportar un inconveniente","Otra solicitud"];
+
+export async function createServiceRequest(input:{locationId:number;customerName?:string;requestType:ServiceRequestType;note?:string}) {
+  await ensureDatabase();
+  const sql=database();
+  if(!Number.isInteger(input.locationId)||!serviceRequestTypes.includes(input.requestType))throw new Error("Seleccione una solicitud válida.");
+  const [location]=await sql<{id:number;name:string;type:string}[]>`SELECT id::int,name,type FROM locations WHERE id=${input.locationId} AND active=TRUE`;
+  if(!location)throw new Error("La ubicación seleccionada no está disponible.");
+  if(location.type==="Otro"&&location.name.toLowerCase().includes("llevar"))throw new Error("La atención a mesa solo está disponible dentro del local.");
+  const [duplicate]=await sql<{id:number}[]>`SELECT id::int FROM service_requests
+    WHERE location_id=${location.id} AND request_type=${input.requestType} AND status='Pendiente'
+      AND created_at > NOW() - INTERVAL '3 minutes' LIMIT 1`;
+  if(duplicate)throw new Error("Ya enviamos esta solicitud. El personal fue notificado.");
+  const customerName=(input.customerName??"").trim().slice(0,80);
+  const note=(input.note??"").trim().slice(0,300);
+  const [created]=await sql<{id:number;createdAt:string}[]>`INSERT INTO service_requests(location_id,location_name,customer_name,request_type,note)
+    VALUES(${location.id},${location.name},${customerName},${input.requestType},${note})
+    RETURNING id::int,created_at AS "createdAt"`;
+  return {...created,locationName:location.name,requestType:input.requestType};
+}
+
+export async function attendServiceRequest(id:number) {
+  await ensureDatabase();
+  if(!Number.isInteger(id)||id<1)throw new Error("Solicitud inválida.");
+  const rows=await database()`UPDATE service_requests SET status='Atendida',attended_at=NOW() WHERE id=${id} AND status='Pendiente' RETURNING id`;
+  if(!rows.length)throw new Error("La solicitud ya fue atendida o no existe.");
+}
+
 export async function adminData(periodDays = 1) {
   await ensureDatabase();
   const sql = database();
   const days = [1, 7, 15, 30].includes(periodDays) ? periodDays : 1;
-  const [products, locations, orders, items, [stats], [settings], banners, schedule, categories, users] = await Promise.all([
+  const [products, locations, orders, items, serviceRequests, [stats], [settings], banners, schedule, categories, users] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, paid, modified, update_note, customer_closed, created_at, updated_at FROM orders ORDER BY created_at DESC LIMIT 100`,
     sql<Record<string, unknown>[]>`SELECT order_id::int, product_id::int, product_name, unit_price, quantity FROM order_items WHERE order_id IN (SELECT id FROM orders ORDER BY created_at DESC LIMIT 100) ORDER BY id`,
+    sql<Record<string, unknown>[]>`SELECT id::int,location_id::int,location_name,customer_name,request_type,note,status,created_at,attended_at
+      FROM service_requests WHERE created_at > NOW() - INTERVAL '24 hours' ORDER BY status DESC,created_at DESC LIMIT 100`,
     sql<{ count: number; sales: number; average: number }[]>`
       SELECT COUNT(*)::int AS count, COALESCE(SUM(total), 0)::int AS sales,
       COALESCE(AVG(total), 0)::int AS average FROM orders
@@ -342,6 +381,11 @@ export async function adminData(periodDays = 1) {
         productId: item.product_id, productName: item.product_name,
         unitPrice: item.unit_price, quantity: item.quantity,
       })),
+    })),
+    serviceRequests:serviceRequests.map(request=>({
+      id:request.id,locationId:request.location_id,locationName:request.location_name,
+      customerName:request.customer_name,requestType:request.request_type,note:request.note,
+      status:request.status,createdAt:request.created_at,attendedAt:request.attended_at,
     })),
     stats: { count: stats?.count ?? 0, sales: stats?.sales ?? 0, average: Math.round(stats?.average ?? 0), periodDays: days },
     settings,
