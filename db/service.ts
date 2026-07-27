@@ -296,9 +296,10 @@ export async function closeCustomerOrder(token:string) {
   if(!result.length) throw new Error("El pedido solo puede finalizar cuando esté entregado y cobrado.");
 }
 
-export async function adminData() {
+export async function adminData(periodDays = 1) {
   await ensureDatabase();
   const sql = database();
+  const days = [1, 7, 15, 30].includes(periodDays) ? periodDays : 1;
   const [products, locations, orders, items, [stats], [settings], banners, schedule, categories] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
@@ -307,7 +308,9 @@ export async function adminData() {
     sql<{ count: number; sales: number; average: number }[]>`
       SELECT COUNT(*)::int AS count, COALESCE(SUM(total), 0)::int AS sales,
       COALESCE(AVG(total), 0)::int AS average FROM orders
-      WHERE created_at >= CURRENT_DATE AND status != 'Cancelado'
+      WHERE (created_at AT TIME ZONE 'America/Bogota')::date >=
+        (NOW() AT TIME ZONE 'America/Bogota')::date - ${days - 1}
+        AND status != 'Cancelado'
     `,
     sql<RestaurantSettings[]>`SELECT name, tagline, welcome_message AS "welcomeMessage", currency, accepting_orders AS "acceptingOrders",
       logo, primary_color AS "primaryColor", accent_color AS "accentColor", background_color AS "backgroundColor",
@@ -329,7 +332,7 @@ export async function adminData() {
         unitPrice: item.unit_price, quantity: item.quantity,
       })),
     })),
-    stats: { count: stats?.count ?? 0, sales: stats?.sales ?? 0, average: Math.round(stats?.average ?? 0) },
+    stats: { count: stats?.count ?? 0, sales: stats?.sales ?? 0, average: Math.round(stats?.average ?? 0), periodDays: days },
     settings,
     banners,
     schedule,

@@ -12,13 +12,14 @@ type Settings = { name: string; tagline: string; welcomeMessage: string; currenc
 type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
 type Category = { id:number; name:string; position:number };
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[] };
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[] };
 type Section = "orders" | "products" | "locations" | "history" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
 const money = (value: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(value);
 const statuses: OrderStatus[] = ["Nuevo", "Aceptado", "En preparación", "Entregado", "Cancelado"];
+const periods = [{days:1,label:"Hoy"},{days:7,label:"7 días"},{days:15,label:"15 días"},{days:30,label:"30 días"}] as const;
 const ago = (date: string) => {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   if (minutes < 1) return "Ahora";
@@ -65,10 +66,11 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   const [orderFilter,setOrderFilter]=useState<"Activos"|OrderStatus|"Todos">("Activos");
   const [locationFilter,setLocationFilter]=useState("Todas");
   const [modifiedOnly,setModifiedOnly]=useState(false);
+  const [periodDays,setPeriodDays]=useState<1|7|15|30>(1);
 
   const load = useCallback(async (quiet = false) => {
     try {
-      const response = await fetch("/api/admin", { cache: "no-store" });
+      const response = await fetch(`/api/admin?period=${periodDays}`, { cache: "no-store" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       setData(result);
@@ -79,7 +81,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "No fue posible cargar el panel.");
     }
-  }, []);
+  }, [periodDays]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => load(), 0);
@@ -124,6 +126,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
     .filter(order=>!modifiedOnly||order.modified)
     .sort((a,b)=>Number(b.modified)-Number(a.modified))??[],[data,orderFilter,locationFilter,modifiedOnly]);
   const date = new Intl.DateTimeFormat("es-CO", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
+  const periodLabel=periods.find(period=>period.days===periodDays)?.label??"Hoy";
   const newManualOrder = (): ManualOrder => ({
     customerName: "",
     locationId: data?.locations.find((location) => location.active)?.id ?? 0,
@@ -158,10 +161,11 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
       {notice && <div className="system-message success-message">{notice}</div>}
       {!data ? <div className="system-message">Cargando pedidos y menú…</div> : <>
         {section === "orders" && <>
+          <div className="stats-period"><div><strong>Resumen de ventas</strong><small>Zona horaria de Colombia</small></div><div className="period-tabs">{periods.map(period=><button className={periodDays===period.days?"active":""} onClick={()=>setPeriodDays(period.days)} key={period.days}>{period.label}</button>)}</div></div>
           <div className="stats">
-            <article><span>Pedidos hoy</span><strong>{data.stats.count}</strong><em>{activeOrders.length} pedidos activos</em></article>
-            <article><span>Ventas hoy</span><strong>{money(data.stats.sales)}</strong><em>Pedidos no cancelados</em></article>
-            <article><span>Ticket promedio</span><strong>{money(data.stats.average)}</strong><em>{data.locations.filter((location) => location.active).length} ubicaciones disponibles</em></article>
+            <article><span>Pedidos · {periodLabel}</span><strong>{data.stats.count}</strong><em>{activeOrders.length} pedidos activos ahora</em></article>
+            <article><span>Ventas · {periodLabel}</span><strong>{money(data.stats.sales)}</strong><em>Excluye pedidos cancelados</em></article>
+            <article><span>Ticket promedio · {periodLabel}</span><strong>{money(data.stats.average)}</strong><em>Venta total ÷ número de pedidos</em></article>
           </div>
           {(data.orders.some(order=>order.modified))&&<div className="change-alert"><span>!</span><div><strong>{data.orders.filter(order=>order.modified).length} pedido(s) modificado(s)</strong><p>El cliente agregó productos o cambió su ubicación. El pedido original fue actualizado.</p></div></div>}
           <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Se actualizan automáticamente cada 10 segundos</p></div><button onClick={() => setManualOrder(newManualOrder())}>＋ Nuevo pedido</button></div>
@@ -189,7 +193,8 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
         </>}
 
         {section === "history" && <>
-          <div className="section-title page-section-title"><div><h2>Historial de pedidos</h2><p>Últimos pedidos entregados y cancelados</p></div><button onClick={() => load()}>↻ Actualizar</button></div>
+          <div className="section-title page-section-title"><div><h2>Historial de ventas</h2><p>Consulte el rendimiento del local por período</p></div><div className="period-tabs">{periods.map(period=><button className={periodDays===period.days?"active":""} onClick={()=>setPeriodDays(period.days)} key={period.days}>{period.label}</button>)}</div></div>
+          <div className="history-summary"><article><span>Ventas del período</span><strong>{money(data.stats.sales)}</strong></article><article><span>Pedidos registrados</span><strong>{data.stats.count}</strong></article><article><span>Ticket promedio</span><strong>{money(data.stats.average)}</strong></article></div>
           <div className="history-table">
             <div className="history-head"><span>Pedido</span><span>Cliente</span><span>Fecha</span><span>Total</span><span>Estado</span></div>
             {history.length === 0 ? <div className="empty-state">Los pedidos terminados aparecerán aquí.</div> : history.map((order) => <div className="history-row" key={order.id}><strong>#{order.id} · {order.locationName}</strong><span>{order.customerName}</span><span>{new Date(order.createdAt).toLocaleString("es-CO")}</span><b>{money(order.total)}</b><em className={`status ${order.status.toLowerCase()}`}>{order.status}</em></div>)}

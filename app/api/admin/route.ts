@@ -8,10 +8,11 @@ function unauthorized() {
   return NextResponse.json({ error: "Acceso no autorizado." }, { status: 401 });
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   if (!(await isAdminRequest())) return unauthorized();
   try {
-    return NextResponse.json(await adminData(), { headers: { "Cache-Control": "no-store" } });
+    const periodDays=Number(request.nextUrl.searchParams.get("period")??1);
+    return NextResponse.json(await adminData(periodDays), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "No fue posible cargar el panel." }, { status: 500 });
