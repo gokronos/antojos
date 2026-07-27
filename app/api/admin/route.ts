@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { acknowledgeOrderChanges, adminData, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
+import { acknowledgeOrderChanges, adminData, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, deleteOrder, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
 import { getAdminSession } from "../../../lib/admin-auth";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +27,9 @@ export async function POST(request: NextRequest) {
     const operational=["orderStatus","orderPaid","acknowledgeOrder","createOrder"];
     if(session.role==="Cocina"&&!["orderStatus","acknowledgeOrder"].includes(body.action))return unauthorized();
     if(session.role==="Caja"&&!operational.includes(body.action))return unauthorized();
-    if(["saveAdminUser","deleteAdminUser"].includes(body.action)&&session.role!=="Propietario")return unauthorized();
+    if(["saveAdminUser","deleteAdminUser"].includes(body.action)&&!["Superadministrador","Propietario"].includes(session.role))return unauthorized();
+    if(body.action==="saveAdminUser"&&body.data.role==="Superadministrador"&&session.role!=="Superadministrador")return unauthorized();
+    if(body.action==="deleteOrder"&&session.role!=="Superadministrador")return unauthorized();
     if (body.action === "saveProduct") await saveProduct(body.data as never);
     else if (body.action === "saveLocation") await saveLocation(body.data as never);
     else if (body.action === "deleteLocation") await deleteLocation(Number(body.data.id));
@@ -44,6 +46,7 @@ export async function POST(request: NextRequest) {
     else if (body.action === "deleteCategory") await deleteCategory(Number(body.data.id));
     else if (body.action === "saveAdminUser") await saveAdminUser(body.data as never);
     else if (body.action === "deleteAdminUser") await deleteAdminUser(Number(body.data.id));
+    else if (body.action === "deleteOrder") await deleteOrder(Number(body.data.id));
     else return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     return NextResponse.json({ error: "Clave incorrecta." }, { status: 401 });
   }
-  const user=databaseUser??{id:0,name:"Propietario",username:"propietario",role:"Propietario" as const};
+  const user=databaseUser??{id:0,name:"Superadministrador",username:"superadmin",role:"Superadministrador" as const};
   await createAdminSession(user);
   return NextResponse.json({ ok: true,user });
 }

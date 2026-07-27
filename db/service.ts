@@ -38,7 +38,7 @@ export type RestaurantSettings = {
 
 export type BannerRecord = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 export type ScheduleRecord = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
-export type AdminRole = "Propietario" | "Administrador" | "Caja" | "Cocina";
+export type AdminRole = "Superadministrador" | "Propietario" | "Administrador" | "Caja" | "Cocina";
 export type AdminUserRecord = { id:number; name:string; username:string; role:AdminRole; active:boolean; createdAt:string };
 
 const initialProducts = [
@@ -141,6 +141,7 @@ export async function ensureDatabase() {
         active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`ALTER TABLE admin_users DROP CONSTRAINT IF EXISTS admin_users_role_check`;
       await sql`INSERT INTO restaurant_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
       const [{ count: bannerCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM banners`;
       if (bannerCount === 0) {
@@ -385,7 +386,7 @@ export async function saveAdminUser(input:Partial<AdminUserRecord>&{name:string;
   const sql=database();
   const name=input.name.trim().slice(0,100);
   const username=input.username.trim().toLowerCase().replace(/[^a-z0-9._-]/g,"").slice(0,60);
-  if(!name||username.length<3||!["Propietario","Administrador","Caja","Cocina"].includes(input.role))throw new Error("Complete correctamente los datos del usuario.");
+  if(!name||username.length<3||!["Superadministrador","Propietario","Administrador","Caja","Cocina"].includes(input.role))throw new Error("Complete correctamente los datos del usuario.");
   if(input.id) {
     if(input.password) {
       if(input.password.length<6)throw new Error("La contraseña debe tener mínimo 6 caracteres.");
@@ -406,6 +407,13 @@ export async function saveAdminUser(input:Partial<AdminUserRecord>&{name:string;
 export async function deleteAdminUser(id:number) {
   await ensureDatabase();
   await database()`DELETE FROM admin_users WHERE id=${id}`;
+}
+
+export async function deleteOrder(id:number) {
+  await ensureDatabase();
+  if(!Number.isInteger(id)||id<1)throw new Error("Pedido inválido.");
+  const rows=await database()`DELETE FROM orders WHERE id=${id} RETURNING id`;
+  if(!rows.length)throw new Error("El pedido ya no existe.");
 }
 
 export async function saveProduct(input: Partial<ProductRecord> & { name: string; price: number; category: string }) {

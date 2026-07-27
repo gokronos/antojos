@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 
 const COOKIE_NAME = "antojitos_admin";
 const SESSION_SECONDS = 60 * 60 * 24 * 30;
-export type AdminSession = { id:number; name:string; username:string; role:"Propietario"|"Administrador"|"Caja"|"Cocina"; expires:number };
+export type AdminSession = { id:number; name:string; username:string; role:"Superadministrador"|"Propietario"|"Administrador"|"Caja"|"Cocina"; expires:number };
 
 function bytesToHex(buffer: ArrayBuffer) {
   return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
