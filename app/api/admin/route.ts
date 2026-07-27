@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { acknowledgeOrderChanges, adminData, createOrder, deleteBanner, deleteCategory, deleteLocation, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
-import { isAdminRequest } from "../../../lib/admin-auth";
+import { acknowledgeOrderChanges, adminData, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
+import { getAdminSession } from "../../../lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +9,7 @@ function unauthorized() {
 }
 
 export async function GET(request: NextRequest) {
-  if (!(await isAdminRequest())) return unauthorized();
+  if (!(await getAdminSession())) return unauthorized();
   try {
     const periodDays=Number(request.nextUrl.searchParams.get("period")??1);
     return NextResponse.json(await adminData(periodDays), { headers: { "Cache-Control": "no-store" } });
@@ -20,9 +20,14 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  if (!(await isAdminRequest())) return unauthorized();
+  const session=await getAdminSession();
+  if (!session) return unauthorized();
   try {
     const body = await request.json() as { action: string; data: Record<string, unknown> };
+    const operational=["orderStatus","orderPaid","acknowledgeOrder","createOrder"];
+    if(session.role==="Cocina"&&!["orderStatus","acknowledgeOrder"].includes(body.action))return unauthorized();
+    if(session.role==="Caja"&&!operational.includes(body.action))return unauthorized();
+    if(["saveAdminUser","deleteAdminUser"].includes(body.action)&&session.role!=="Propietario")return unauthorized();
     if (body.action === "saveProduct") await saveProduct(body.data as never);
     else if (body.action === "saveLocation") await saveLocation(body.data as never);
     else if (body.action === "deleteLocation") await deleteLocation(Number(body.data.id));
@@ -37,6 +42,8 @@ export async function POST(request: NextRequest) {
     else if (body.action === "saveSchedule") await saveSchedule(body.data as never);
     else if (body.action === "saveCategory") await saveCategory(String(body.data.name ?? ""));
     else if (body.action === "deleteCategory") await deleteCategory(Number(body.data.id));
+    else if (body.action === "saveAdminUser") await saveAdminUser(body.data as never);
+    else if (body.action === "deleteAdminUser") await deleteAdminUser(Number(body.data.id));
     else return NextResponse.json({ error: "Acción desconocida." }, { status: 400 });
     return NextResponse.json({ ok: true });
   } catch (error) {

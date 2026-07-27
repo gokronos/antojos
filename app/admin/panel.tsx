@@ -12,8 +12,11 @@ type Settings = { name: string; tagline: string; welcomeMessage: string; currenc
 type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
 type Category = { id:number; name:string; position:number };
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[] };
-type Section = "orders" | "products" | "locations" | "history" | "branding" | "settings";
+type AdminRole="Propietario"|"Administrador"|"Caja"|"Cocina";
+type AdminSession={id:number;name:string;username:string;role:AdminRole;expires:number};
+type AdminUser={id?:number;name:string;username:string;role:AdminRole;active:boolean;password?:string;createdAt?:string};
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[];users:AdminUser[] };
+type Section = "orders" | "products" | "locations" | "history" | "users" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
@@ -49,7 +52,7 @@ async function optimizedImage(file: File, maxWidth = 1400) {
   return canvas.toDataURL("image/webp", .8);
 }
 
-export default function AdminPanel({ displayName }: { displayName: string }) {
+export default function AdminPanel({ session }: { session:AdminSession }) {
   const [data, setData] = useState<AdminData | null>(null);
   const [section, setSection] = useState<Section>("orders");
   const [error, setError] = useState("");
@@ -67,6 +70,9 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
   const [locationFilter,setLocationFilter]=useState("Todas");
   const [modifiedOnly,setModifiedOnly]=useState(false);
   const [periodDays,setPeriodDays]=useState<1|7|15|30>(1);
+  const [editingUser,setEditingUser]=useState<AdminUser|null>(null);
+  const canManage=session.role==="Propietario"||session.role==="Administrador";
+  const canSeeHistory=session.role!=="Cocina";
 
   const load = useCallback(async (quiet = false) => {
     try {
@@ -139,18 +145,19 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
       <div className="brand"><span>ML</span><div>{data?.settings.name ?? "Mesa Lista"}<small>Panel del local</small></div></div>
       <nav>
         <button className={section === "orders" ? "active" : ""} onClick={() => setSection("orders")}>▦ <span>Pedidos</span><b>{activeOrders.filter((order) => order.status === "Nuevo").length}</b></button>
-        <button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>◫ <span>Productos</span></button>
-        <button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}>⌁ <span>Mesas y barra</span></button>
-        <button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}>◷ <span>Historial</span></button>
-        <button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}>✦ <span>Diseño y negocio</span></button>
-        <button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>⚙ <span>Configuración</span></button>
+        {canManage&&<button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}>◫ <span>Productos</span></button>}
+        {canManage&&<button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}>⌁ <span>Mesas y barra</span></button>}
+        {canSeeHistory&&<button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}>◷ <span>Historial</span></button>}
+        {session.role==="Propietario"&&<button className={section === "users" ? "active" : ""} onClick={() => setSection("users")}>♙ <span>Usuarios</span></button>}
+        {canManage&&<button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}>✦ <span>Diseño y negocio</span></button>}
+        {canManage&&<button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}>⚙ <span>Configuración</span></button>}
       </nav>
       <Link className="view-menu" href="/">Ver menú del cliente ↗</Link>
     </aside>
 
     <section className="admin-main">
       <header className="admin-top">
-        <div><p>{date}</p><h1>Buenas tardes, {displayName}</h1></div>
+        <div><p>{date} · {session.role}</p><h1>Hola, {session.name}</h1></div>
         <div className="admin-actions">
           <div className={`open-pill ${data?.settings.acceptingOrders === false ? "closed" : ""}`}><i /> {data?.settings.acceptingOrders === false ? "Local pausado" : "Local abierto"}</div>
           <button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/admin/login"; }}>Salir</button>
@@ -201,6 +208,12 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
           </div>
         </>}
 
+        {section==="users"&&session.role==="Propietario"&&<>
+          <div className="section-title page-section-title"><div><h2>Usuarios y roles</h2><p>Controle quién puede entrar y qué puede administrar</p></div><button onClick={()=>setEditingUser({name:"",username:"",role:"Administrador",active:true,password:""})}>＋ Crear usuario</button></div>
+          <div className="role-help"><span><b>Propietario</b> Control total y usuarios</span><span><b>Administrador</b> Menú, pedidos y negocio</span><span><b>Caja</b> Pedidos, cobros e historial</span><span><b>Cocina</b> Pedidos y estados</span></div>
+          <div className="user-list">{data.users.length===0?<div className="empty-state">Todavía no hay usuarios adicionales. La clave principal sigue funcionando.</div>:data.users.map(user=><article key={user.id}><span className="avatar">{user.name.split(" ").map(part=>part[0]).slice(0,2).join("").toUpperCase()}</span><div><strong>{user.name}</strong><small>@{user.username} · {user.role}</small></div><i className={user.active?"active":""}>{user.active?"Activo":"Inactivo"}</i><button className="edit" onClick={()=>setEditingUser({...user,password:""})}>Editar</button></article>)}</div>
+        </>}
+
         {section === "branding" && brandingDraft && <>
           <div className="section-title page-section-title"><div><h2>Diseño y datos del negocio</h2><p>Personalice lo que ven sus clientes</p></div><button onClick={async () => { if (await action("saveBranding", brandingDraft as unknown as Record<string, unknown>, "Identidad del negocio guardada.")) setBrandingDraft({ ...brandingDraft }); }}>Guardar cambios</button></div>
           <div className="branding-grid">
@@ -243,6 +256,7 @@ export default function AdminPanel({ displayName }: { displayName: string }) {
       if (await action("createOrder", { customerName: manualOrder.customerName, locationId: manualOrder.locationId, notes: manualOrder.notes, items }, "Pedido creado.")) setManualOrder(null);
     }} />}
     {categoriesOpen && data && <CategoryModal categories={data.categories} products={data.products} saving={saving} onClose={() => setCategoriesOpen(false)} onAdd={(name) => action("saveCategory",{name},"Categoría creada.")} onDelete={(id) => action("deleteCategory",{id},"Categoría eliminada.")} />}
+    {editingUser&&<UserModal user={editingUser} saving={saving} onChange={setEditingUser} onClose={()=>setEditingUser(null)} onSave={async()=>{if(await action("saveAdminUser",editingUser as unknown as Record<string,unknown>,"Usuario guardado."))setEditingUser(null)}} onDelete={editingUser.id?async()=>{if(window.confirm(`¿Eliminar el acceso de ${editingUser.name}?`)&&await action("deleteAdminUser",{id:editingUser.id},"Usuario eliminado."))setEditingUser(null)}:undefined}/>}
   </main>;
 }
 
@@ -295,6 +309,10 @@ function LocationModal({ location, saving, onChange, onClose, onSave, onDelete }
 function CategoryModal({ categories, products, saving, onClose, onAdd, onDelete }: { categories:Category[]; products:Product[]; saving:boolean; onClose:()=>void; onAdd:(name:string)=>Promise<boolean>; onDelete:(id:number)=>Promise<boolean> }) {
   const [name,setName]=useState("");
   return <div className="modal-back"><div className="edit-modal category-modal"><button type="button" className="close" onClick={onClose}>×</button><h2>Categorías</h2><p>Organice el menú para que sus clientes encuentren todo fácilmente.</p><form className="category-create" onSubmit={async (event)=>{event.preventDefault();if(await onAdd(name)){setName("");}}}><input required value={name} onChange={(event)=>setName(event.target.value)} placeholder="Ej. Postres" maxLength={60}/><button disabled={saving}>＋ Crear</button></form><div className="category-list">{categories.map((category)=>{const count=products.filter((product)=>product.category===category.name).length;return <div key={category.id}><span><strong>{category.name}</strong><small>{count} producto{count===1?"":"s"}</small></span><button disabled={saving||count>0} title={count>0?"Mueva primero los productos a otra categoría":"Eliminar categoría"} onClick={()=>onDelete(category.id)}>Eliminar</button></div>;})}</div></div></div>;
+}
+
+function UserModal({user,saving,onChange,onClose,onSave,onDelete}:{user:AdminUser;saving:boolean;onChange:(user:AdminUser)=>void;onClose:()=>void;onSave:()=>void;onDelete?:()=>void}) {
+  return <div className="modal-back"><form className="edit-modal" onSubmit={event=>{event.preventDefault();onSave()}}><button type="button" className="close" onClick={onClose}>×</button><h2>{user.id?"Editar usuario":"Crear usuario"}</h2><p>Asigne únicamente los permisos que esta persona necesita.</p><label>Nombre<input required value={user.name} onChange={event=>onChange({...user,name:event.target.value})} placeholder="Nombre completo"/></label><label>Usuario<input required minLength={3} value={user.username} onChange={event=>onChange({...user,username:event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g,"")})} placeholder="Ej. cocina" autoCapitalize="none"/></label><label>Rol<select value={user.role} onChange={event=>onChange({...user,role:event.target.value as AdminRole})}><option>Propietario</option><option>Administrador</option><option>Caja</option><option>Cocina</option></select></label><label>{user.id?"Nueva contraseña (opcional)":"Contraseña"}<input required={!user.id} minLength={6} type="password" value={user.password??""} onChange={event=>onChange({...user,password:event.target.value})} placeholder={user.id?"Déjela vacía para conservarla":"Mínimo 6 caracteres"}/></label><div className="accepting-toggle"><div><strong>Usuario activo</strong><small>Si lo apaga, ya no podrá iniciar sesión.</small></div><label className="switch"><input type="checkbox" checked={user.active} onChange={event=>onChange({...user,active:event.target.checked})}/><span/></label></div><button className="save" disabled={saving}>{saving?"Guardando…":"Guardar usuario"}</button>{onDelete&&<button type="button" className="delete-location" disabled={saving} onClick={onDelete}>Eliminar usuario</button>}</form></div>;
 }
 
 function ManualOrderModal({ order, products, locations, saving, onChange, onClose, onSave }: { order: ManualOrder; products: Product[]; locations: Location[]; saving: boolean; onChange: (order: ManualOrder) => void; onClose: () => void; onSave: () => void }) {

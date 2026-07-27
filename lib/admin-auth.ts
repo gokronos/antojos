@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 
 const COOKIE_NAME = "antojitos_admin";
 const SESSION_SECONDS = 60 * 60 * 24 * 30;
+export type AdminSession = { id:number; name:string; username:string; role:"Propietario"|"Administrador"|"Caja"|"Cocina"; expires:number };
 
 function bytesToHex(buffer: ArrayBuffer) {
   return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -27,9 +28,10 @@ function safeEqual(left: string, right: string) {
   return result === 0;
 }
 
-export async function createAdminSession() {
+export async function createAdminSession(user:Omit<AdminSession,"expires">) {
   const expires = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
-  const value = `${expires}.${await signature(String(expires))}`;
+  const payload=Buffer.from(JSON.stringify({...user,expires})).toString("base64url");
+  const value = `${payload}.${await signature(payload)}`;
   const store = await cookies();
   store.set(COOKIE_NAME, value, {
     httpOnly: true,
@@ -45,13 +47,20 @@ export async function clearAdminSession() {
   store.delete(COOKIE_NAME);
 }
 
-export async function isAdminRequest() {
+export async function getAdminSession():Promise<AdminSession|null> {
   const value = (await cookies()).get(COOKIE_NAME)?.value;
-  if (!value) return false;
-  const [expiresText, received] = value.split(".");
-  const expires = Number(expiresText);
-  if (!expires || expires < Math.floor(Date.now() / 1000) || !received) return false;
-  return safeEqual(received, await signature(expiresText));
+  if (!value) return null;
+  const [payload, received] = value.split(".");
+  if(!payload||!received||!safeEqual(received,await signature(payload)))return null;
+  try {
+    const session=JSON.parse(Buffer.from(payload,"base64url").toString()) as AdminSession;
+    if(!session.expires||session.expires<Math.floor(Date.now()/1000)||!session.role)return null;
+    return session;
+  } catch { return null; }
+}
+
+export async function isAdminRequest() {
+  return Boolean(await getAdminSession());
 }
 
 export function validAdminPassword(password: string) {

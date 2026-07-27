@@ -38,6 +38,8 @@ export type RestaurantSettings = {
 
 export type BannerRecord = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 export type ScheduleRecord = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
+export type AdminRole = "Propietario" | "Administrador" | "Caja" | "Cocina";
+export type AdminUserRecord = { id:number; name:string; username:string; role:AdminRole; active:boolean; createdAt:string };
 
 const initialProducts = [
   ["Burger de la casa", "Carne artesanal, queso, tocineta y salsa de la casa", 24900, "Hamburguesas", "🍔"],
@@ -131,6 +133,13 @@ export async function ensureDatabase() {
       await sql`CREATE TABLE IF NOT EXISTS schedule_days (
         weekday SMALLINT PRIMARY KEY CHECK (weekday BETWEEN 0 AND 6), day TEXT NOT NULL,
         open_time TIME NOT NULL, close_time TIME NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS admin_users (
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('Propietario','Administrador','Caja','Cocina')),
+        password_salt TEXT NOT NULL, password_hash TEXT NOT NULL,
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
       await sql`INSERT INTO restaurant_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
       const [{ count: bannerCount }] = await sql<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM banners`;
@@ -300,7 +309,7 @@ export async function adminData(periodDays = 1) {
   await ensureDatabase();
   const sql = database();
   const days = [1, 7, 15, 30].includes(periodDays) ? periodDays : 1;
-  const [products, locations, orders, items, [stats], [settings], banners, schedule, categories] = await Promise.all([
+  const [products, locations, orders, items, [stats], [settings], banners, schedule, categories, users] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, paid, modified, update_note, customer_closed, created_at, updated_at FROM orders ORDER BY created_at DESC LIMIT 100`,
@@ -318,6 +327,7 @@ export async function adminData(periodDays = 1) {
     sql<BannerRecord[]>`SELECT id::int, eyebrow, title, text, image, active, position FROM banners ORDER BY position, id`,
     sql<ScheduleRecord[]>`SELECT weekday::int, day, to_char(open_time,'HH24:MI') AS "openTime", to_char(close_time,'HH24:MI') AS "closeTime", enabled FROM schedule_days ORDER BY weekday`,
     sql<{id:number;name:string;position:number}[]>`SELECT id::int, name, position FROM categories ORDER BY position, name`,
+    sql<AdminUserRecord[]>`SELECT id::int,name,username,role,active,created_at AS "createdAt" FROM admin_users ORDER BY id`,
   ]);
   return {
     products,
@@ -337,7 +347,65 @@ export async function adminData(periodDays = 1) {
     banners,
     schedule,
     categories,
+    users,
   };
+}
+
+function bytesToHex(bytes:Uint8Array) {
+  return Array.from(bytes,byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+
+async function passwordHash(password:string,salt:string) {
+  const key=await crypto.subtle.importKey("raw",new TextEncoder().encode(password),"PBKDF2",false,["deriveBits"]);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:new TextEncoder().encode(salt),iterations:120000},key,256);
+  return bytesToHex(new Uint8Array(bits));
+}
+
+function constantEqual(left:string,right:string) {
+  if(left.length!==right.length)return false;
+  let result=0;
+  for(let index=0;index<left.length;index++)result|=left.charCodeAt(index)^right.charCodeAt(index);
+  return result===0;
+}
+
+export async function authenticateAdminUser(usernameInput:string,password:string) {
+  await ensureDatabase();
+  const username=usernameInput.trim().toLowerCase().slice(0,60);
+  if(!username||!password||password.length>200)return null;
+  const [user]=await database()<(AdminUserRecord & {passwordSalt:string;passwordHash:string})[]>`
+    SELECT id::int,name,username,role,active,password_salt AS "passwordSalt",password_hash AS "passwordHash"
+    FROM admin_users WHERE lower(username)=${username} AND active=TRUE`;
+  if(!user)return null;
+  const received=await passwordHash(password,user.passwordSalt);
+  return constantEqual(received,user.passwordHash)?{id:user.id,name:user.name,username:user.username,role:user.role}:null;
+}
+
+export async function saveAdminUser(input:Partial<AdminUserRecord>&{name:string;username:string;role:AdminRole;password?:string}) {
+  await ensureDatabase();
+  const sql=database();
+  const name=input.name.trim().slice(0,100);
+  const username=input.username.trim().toLowerCase().replace(/[^a-z0-9._-]/g,"").slice(0,60);
+  if(!name||username.length<3||!["Propietario","Administrador","Caja","Cocina"].includes(input.role))throw new Error("Complete correctamente los datos del usuario.");
+  if(input.id) {
+    if(input.password) {
+      if(input.password.length<6)throw new Error("La contraseña debe tener mínimo 6 caracteres.");
+      const salt=crypto.randomUUID();
+      await sql`UPDATE admin_users SET name=${name},username=${username},role=${input.role},active=${input.active!==false},
+        password_salt=${salt},password_hash=${await passwordHash(input.password,salt)},updated_at=NOW() WHERE id=${input.id}`;
+    } else {
+      await sql`UPDATE admin_users SET name=${name},username=${username},role=${input.role},active=${input.active!==false},updated_at=NOW() WHERE id=${input.id}`;
+    }
+    return;
+  }
+  if(!input.password||input.password.length<6)throw new Error("La contraseña debe tener mínimo 6 caracteres.");
+  const salt=crypto.randomUUID();
+  await sql`INSERT INTO admin_users(name,username,role,password_salt,password_hash,active)
+    VALUES(${name},${username},${input.role},${salt},${await passwordHash(input.password,salt)},${input.active!==false})`;
+}
+
+export async function deleteAdminUser(id:number) {
+  await ensureDatabase();
+  await database()`DELETE FROM admin_users WHERE id=${id}`;
 }
 
 export async function saveProduct(input: Partial<ProductRecord> & { name: string; price: number; category: string }) {
