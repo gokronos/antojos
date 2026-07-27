@@ -309,7 +309,7 @@ export async function adminData(periodDays = 1) {
       SELECT COUNT(*)::int AS count, COALESCE(SUM(total), 0)::int AS sales,
       COALESCE(AVG(total), 0)::int AS average FROM orders
       WHERE (created_at AT TIME ZONE 'America/Bogota')::date >=
-        (NOW() AT TIME ZONE 'America/Bogota')::date - ${days - 1}
+        (NOW() AT TIME ZONE 'America/Bogota')::date - ${days - 1}::int
         AND status != 'Cancelado'
     `,
     sql<RestaurantSettings[]>`SELECT name, tagline, welcome_message AS "welcomeMessage", currency, accepting_orders AS "acceptingOrders",
