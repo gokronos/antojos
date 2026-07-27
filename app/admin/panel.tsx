@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { alertNewOrder, cancelOrderNotification, initNotifications, testNotificationAlert } from "../../lib/notifications";
 
 type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
@@ -73,6 +74,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
   const [modifiedOnly,setModifiedOnly]=useState(false);
   const [periodDays,setPeriodDays]=useState<1|7|15|30>(1);
   const [editingUser,setEditingUser]=useState<AdminUser|null>(null);
+  const [alertedOrderIds, setAlertedOrderIds] = useState<Set<number>>(new Set());
   const canManage=["Superadministrador","Propietario","Administrador"].includes(session.role);
   const canSeeHistory=session.role!=="Cocina";
 
@@ -81,6 +83,35 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
       const response = await fetch(`/api/admin?period=${periodDays}`, { cache: "no-store" });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
+      
+      // Detectar nuevos pedidos y pedidos que ya fueron aceptados
+      if (result.orders) {
+        result.orders.forEach((order: Order) => {
+          const wasAlerted = alertedOrderIds.has(order.id);
+          const isNew = order.status === "Nuevo";
+          
+          // Alerta si es un pedido nuevo que aún no hemos alertado
+          if (isNew && !wasAlerted) {
+            alertNewOrder(order.id, {
+              customerName: order.customerName,
+              locationName: order.locationName,
+              total: order.total,
+            });
+            setAlertedOrderIds((prev) => new Set([...prev, order.id]));
+          }
+          
+          // Cancelar alerta si el pedido ya fue aceptado o cambió de estado
+          if (wasAlerted && !isNew) {
+            cancelOrderNotification(order.id);
+            setAlertedOrderIds((prev) => {
+              const newSet = new Set(prev);
+              newSet.delete(order.id);
+              return newSet;
+            });
+          }
+        });
+      }
+      
       setData(result);
       setSettingsDraft((current) => current ?? result.settings);
       setBrandingDraft((current) => current ?? result.settings);
@@ -89,9 +120,12 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "No fue posible cargar el panel.");
     }
-  }, [periodDays]);
+  }, [periodDays, alertedOrderIds]);
 
   useEffect(() => {
+    // Inicializar notificaciones
+    initNotifications();
+    
     const initial = window.setTimeout(() => load(), 0);
     const timer = window.setInterval(() => load(true), 10000);
     const handler = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPrompt); };
@@ -162,6 +196,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
       <header className="admin-top">
         <div><p>{date} · {session.role}</p><h1>Hola, {session.name}</h1></div>
         <div className="admin-actions">
+          <button onClick={() => testNotificationAlert()} style={{ backgroundColor: "#d946ef", color: "#ffffff", fontWeight: "bold" }}>🔔 Probar Alerta</button>
           <div className={`open-pill ${data?.settings.acceptingOrders === false ? "closed" : ""}`}><i /> {data?.settings.acceptingOrders === false ? "Local pausado" : "Local abierto"}</div>
           <button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/admin/login"; }}>Salir</button>
         </div>
