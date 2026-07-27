@@ -8,6 +8,7 @@ un panel instalable como PWA.
 
 - Menú público: https://antojos.vercel.app
 - Panel del local: https://antojos.vercel.app/admin
+- APK Android: [Antojos-Android.apk](./Antojos-Android.apk)
 - Código: https://github.com/gokronos/antojos
 
 ## Tecnología
@@ -15,7 +16,12 @@ un panel instalable como PWA.
 - Next.js 16 y React 19
 - PostgreSQL (Neon o Vercel Postgres)
 - PWA instalable en Android
+- Aplicación Android nativa empaquetada con Capacitor
 - Sesión administrativa firmada con cookie segura
+
+La APK abre directamente el panel publicado y requiere Android 7.0 o posterior.
+Como usa la versión de Vercel, las mejoras del sistema aparecen sin tener que
+generar una APK nueva.
 
 ## Desarrollo
 
