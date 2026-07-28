@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { alertNewOrder, cancelOrderNotification, initNotifications, testNotificationAlert } from "../../lib/notifications";
+import { alertNewOrder, alertServiceRequest, alertModifiedOrder, cancelOrderNotification, initNotifications, testNotificationAlert } from "../../lib/notifications";
 
 type Product = { id?: number; name: string; description: string; price: number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
@@ -75,6 +75,8 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
   const [periodDays,setPeriodDays]=useState<1|7|15|30>(1);
   const [editingUser,setEditingUser]=useState<AdminUser|null>(null);
   const [alertedOrderIds, setAlertedOrderIds] = useState<Set<number>>(new Set());
+  const [alertedServiceIds, setAlertedServiceIds] = useState<Set<number>>(new Set());
+  const [alertedModifiedIds, setAlertedModifiedIds] = useState<Set<number>>(new Set());
   const canManage=["Superadministrador","Propietario","Administrador"].includes(session.role);
   const canSeeHistory=session.role!=="Cocina";
 
@@ -109,6 +111,30 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
               return newSet;
             });
           }
+
+          // Detectar si el cliente modificó el pedido o agregó adicionales
+          if (order.modified && !alertedModifiedIds.has(order.id)) {
+            alertModifiedOrder(order.id, {
+              locationName: order.locationName,
+              customerName: order.customerName,
+              updateNote: order.updateNote,
+            });
+            setAlertedModifiedIds((prev) => new Set([...prev, order.id]));
+          }
+        });
+      }
+
+      // Detectar nuevas solicitudes de atención en mesa (Llamar al mesero, Pedir la cuenta, etc.)
+      if (result.serviceRequests) {
+        result.serviceRequests.forEach((req: ServiceRequest) => {
+          if (req.status === "Pendiente" && !alertedServiceIds.has(req.id)) {
+            alertServiceRequest(req.id, {
+              locationName: req.locationName,
+              requestType: req.requestType,
+              customerName: req.customerName,
+            });
+            setAlertedServiceIds((prev) => new Set([...prev, req.id]));
+          }
         });
       }
       
@@ -120,7 +146,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
     } catch (cause) {
       if (!quiet) setError(cause instanceof Error ? cause.message : "No fue posible cargar el panel.");
     }
-  }, [periodDays, alertedOrderIds]);
+  }, [periodDays, alertedOrderIds, alertedServiceIds, alertedModifiedIds]);
 
   useEffect(() => {
     // Inicializar notificaciones

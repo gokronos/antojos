@@ -1,4 +1,5 @@
 import postgres from "postgres";
+import webpush from "web-push";
 
 export type ProductRecord = {
   id: number;
@@ -134,6 +135,15 @@ export async function ensureDatabase() {
       await sql`ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT '300 123 4567'`;
       await sql`ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS whatsapp TEXT NOT NULL DEFAULT '573001234567'`;
       await sql`ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS map_url TEXT NOT NULL DEFAULT 'https://maps.google.com'`;
+      await sql`ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS vapid_public_key TEXT NOT NULL DEFAULT ''`;
+      await sql`ALTER TABLE restaurant_settings ADD COLUMN IF NOT EXISTS vapid_private_key TEXT NOT NULL DEFAULT ''`;
+      await sql`CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id BIGSERIAL PRIMARY KEY,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
       await sql`CREATE TABLE IF NOT EXISTS banners (
         id BIGSERIAL PRIMARY KEY, eyebrow TEXT NOT NULL, title TEXT NOT NULL,
         text TEXT NOT NULL, image TEXT NOT NULL DEFAULT '', active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -333,7 +343,7 @@ export async function createServiceRequest(input:{locationId:number;customerName
   const [created]=await sql<{id:number;createdAt:string}[]>`INSERT INTO service_requests(location_id,location_name,customer_name,request_type,note)
     VALUES(${location.id},${location.name},${customerName},${input.requestType},${note})
     RETURNING id::int,created_at AS "createdAt"`;
-  return {...created,locationName:location.name,requestType:input.requestType};
+  return {...created,locationName:location.name,requestType:input.requestType,customerName,note};
 }
 
 export async function attendServiceRequest(id:number) {
@@ -603,4 +613,50 @@ export async function updateOrderPaid(id:number,paid:boolean) {
 export async function acknowledgeOrderChanges(id:number) {
   await ensureDatabase();
   await database()`UPDATE orders SET modified=FALSE,update_note='',updated_at=NOW() WHERE id=${id}`;
+}
+
+export async function getVapidKeys() {
+  await ensureDatabase();
+  const sql = database();
+  const [settings] = await sql<{ vapidPublicKey: string; vapidPrivateKey: string }[]>`
+    SELECT vapid_public_key AS "vapidPublicKey", vapid_private_key AS "vapidPrivateKey"
+    FROM restaurant_settings WHERE id = 1
+  `;
+
+  if (settings?.vapidPublicKey && settings?.vapidPrivateKey) {
+    return { publicKey: settings.vapidPublicKey, privateKey: settings.vapidPrivateKey };
+  }
+
+  const keys = webpush.generateVAPIDKeys();
+  await sql`
+    UPDATE restaurant_settings
+    SET vapid_public_key = ${keys.publicKey}, vapid_private_key = ${keys.privateKey}
+    WHERE id = 1
+  `;
+
+  return keys;
+}
+
+export async function savePushSubscription(sub: { endpoint: string; p256dh: string; auth: string }) {
+  await ensureDatabase();
+  const sql = database();
+  await sql`
+    INSERT INTO push_subscriptions (endpoint, p256dh, auth)
+    VALUES (${sub.endpoint}, ${sub.p256dh}, ${sub.auth})
+    ON CONFLICT (endpoint) DO UPDATE SET p256dh = ${sub.p256dh}, auth = ${sub.auth}
+  `;
+}
+
+export async function removePushSubscription(endpoint: string) {
+  await ensureDatabase();
+  const sql = database();
+  await sql`DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}`;
+}
+
+export async function getPushSubscriptions() {
+  await ensureDatabase();
+  const sql = database();
+  return sql<{ id: number; endpoint: string; p256dh: string; auth: string }[]>`
+    SELECT id::int, endpoint, p256dh, auth FROM push_subscriptions
+  `;
 }
