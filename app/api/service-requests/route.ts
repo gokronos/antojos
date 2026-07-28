@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceRequest } from "../../../db/service";
+import { assertRestaurantIsOpen, createServiceRequest } from "../../../db/service";
 import { sendPushNotificationToAdmins } from "../../../lib/push-notifications";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request:NextRequest) {
   try {
+    await assertRestaurantIsOpen();
     const result=await createServiceRequest(await request.json());
 
     // Enviar notificación Push a los administradores

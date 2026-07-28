@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { closeCustomerOrder, createOrder, getCustomerOrder, updateCustomerOrder } from "../../../db/service";
+import { assertRestaurantIsOpen, closeCustomerOrder, createOrder, getCustomerOrder, updateCustomerOrder } from "../../../db/service";
 import { sendPushNotificationToAdmins } from "../../../lib/push-notifications";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    await assertRestaurantIsOpen();
     const result = await createOrder(await request.json());
 
     // Enviar notificación Push a los administradores en segundo plano
@@ -40,6 +41,7 @@ export async function PATCH(request:NextRequest) {
       await closeCustomerOrder(String(body.token??""));
       return NextResponse.json({ok:true});
     }
+    await assertRestaurantIsOpen();
     const updated = await updateCustomerOrder(String(body.token??""),body);
 
     // Enviar notificación Push cuando el cliente modifica el pedido o agrega adicionales

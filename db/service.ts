@@ -216,6 +216,27 @@ export async function publicData() {
   return { products, locations, settings, banners, schedule };
 }
 
+export async function assertRestaurantIsOpen() {
+  await ensureDatabase();
+  const sql = database();
+  const [{ acceptingOrders }] = await sql<{ acceptingOrders: boolean }[]>`
+    SELECT accepting_orders AS "acceptingOrders" FROM restaurant_settings WHERE id = 1
+  `;
+  if (!acceptingOrders) throw new Error("El local está cerrado y no está recibiendo solicitudes.");
+
+  const colombiaNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Bogota" }));
+  const weekday = (colombiaNow.getDay() + 6) % 7;
+  const currentTime = `${String(colombiaNow.getHours()).padStart(2, "0")}:${String(colombiaNow.getMinutes()).padStart(2, "0")}`;
+  const [today] = await sql<{ openTime: string; closeTime: string; enabled: boolean }[]>`
+    SELECT to_char(open_time, 'HH24:MI') AS "openTime",
+      to_char(close_time, 'HH24:MI') AS "closeTime", enabled
+    FROM schedule_days WHERE weekday = ${weekday}
+  `;
+  if (!today?.enabled || currentTime < today.openTime || currentTime >= today.closeTime) {
+    throw new Error("El local está cerrado según el horario de atención.");
+  }
+}
+
 export async function createOrder(input: {
   customerName: string;
   notes?: string;
