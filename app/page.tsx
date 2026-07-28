@@ -186,6 +186,15 @@ export default function Home() {
     } finally {setSending(false);}
   }
 
+  if (loading) {
+    return (
+      <main className="menu-initial-loading" aria-live="polite" aria-busy="true">
+        <span />
+        <p>Cargando el menú…</p>
+      </main>
+    );
+  }
+
   return (
     <main className="customer" style={themeStyle}>
       <header className="menu-head">
