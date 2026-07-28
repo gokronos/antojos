@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { acknowledgeOrderChanges, adminData, attendServiceRequest, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, deleteOrder, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus } from "../../../db/service";
+import { acknowledgeOrderChanges, adminData, attendServiceRequest, confirmDelivery, createOrder, deleteAdminUser, deleteBanner, deleteCategory, deleteLocation, deleteOrder, quoteDelivery, saveAdminUser, saveBanner, saveBranding, saveCategory, saveLocation, saveProduct, saveSchedule, saveSettings, updateOrderPaid, updateOrderStatus, updatePaymentStatus } from "../../../db/service";
 import { getAdminSession } from "../../../lib/admin-auth";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   if (!session) return unauthorized();
   try {
     const body = await request.json() as { action: string; data: Record<string, unknown> };
-    const operational=["orderStatus","orderPaid","acknowledgeOrder","createOrder","attendServiceRequest"];
+    const operational=["orderStatus","orderPaid","paymentStatus","quoteDelivery","confirmDelivery","acknowledgeOrder","createOrder","attendServiceRequest"];
     if(session.role==="Cocina"&&!["orderStatus","acknowledgeOrder"].includes(body.action))return unauthorized();
     if(session.role==="Caja"&&!operational.includes(body.action))return unauthorized();
     if(["saveAdminUser","deleteAdminUser"].includes(body.action)&&!["Superadministrador","Propietario"].includes(session.role))return unauthorized();
@@ -35,6 +35,9 @@ export async function POST(request: NextRequest) {
     else if (body.action === "deleteLocation") await deleteLocation(Number(body.data.id));
     else if (body.action === "orderStatus") await updateOrderStatus(Number(body.data.id), String(body.data.status) as never);
     else if (body.action === "orderPaid") await updateOrderPaid(Number(body.data.id), Boolean(body.data.paid));
+    else if (body.action === "paymentStatus") await updatePaymentStatus(Number(body.data.id),String(body.data.status));
+    else if (body.action === "quoteDelivery") await quoteDelivery(Number(body.data.id),Number(body.data.fee),Number(body.data.estimatedMinutes));
+    else if (body.action === "confirmDelivery") await confirmDelivery(Number(body.data.id));
     else if (body.action === "acknowledgeOrder") await acknowledgeOrderChanges(Number(body.data.id));
     else if (body.action === "createOrder") await createOrder(body.data as never);
     else if (body.action === "saveSettings") await saveSettings(body.data as never);

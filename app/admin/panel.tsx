@@ -7,8 +7,8 @@ import { alertNewOrder, alertServiceRequest, alertModifiedOrder, cancelOrderNoti
 
 type Product = { id?: number; name: string; description: string; price: number; packagingFee:number; category: string; icon: string; images: string[]; active: boolean };
 type Location = { id?: number; name: string; type: "Mesa" | "Barra" | "Otro"; active: boolean };
-type OrderStatus = "Nuevo" | "Aceptado" | "En preparación" | "Entregado" | "Cancelado";
-type Order = { id: number; locationName: string; customerName: string; notes: string; total: number; packagingTotal:number; status: OrderStatus; paid:boolean; modified:boolean; updateNote:string; customerClosed:boolean; createdAt: string; updatedAt:string; items: { productId: number; productName: string; unitPrice:number; quantity: number }[] };
+type OrderStatus = "Nuevo" | "Aceptado" | "En preparación" | "Listo" | "En camino" | "Entregado" | "Cancelado";
+type Order = { id: number; locationName: string; customerName: string; notes: string; total: number; packagingTotal:number; orderType:string; customerPhone:string; address:string; neighborhood:string; addressReference:string; paymentMethod:string; paymentStatus:string; deliveryFee:number|null; deliveryQuoteStatus:string; estimatedMinutes:number|null; status: OrderStatus; paid:boolean; modified:boolean; updateNote:string; customerClosed:boolean; createdAt: string; updatedAt:string; items: { productId: number; productName: string; unitPrice:number; quantity: number }[] };
 type Settings = { name: string; tagline: string; welcomeMessage: string; currency: string; acceptingOrders: boolean; logo: string; primaryColor: string; accentColor: string; backgroundColor: string; address: string; phone: string; whatsapp: string; mapUrl: string };
 type Banner = { id?: number; eyebrow: string; title: string; text: string; image: string; active: boolean; position: number };
 type ScheduleDay = { weekday: number; day: string; openTime: string; closeTime: string; enabled: boolean };
@@ -23,7 +23,7 @@ type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
 const money = (value: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(value);
-const statuses: OrderStatus[] = ["Nuevo", "Aceptado", "En preparación", "Entregado", "Cancelado"];
+const statuses: OrderStatus[] = ["Nuevo", "Aceptado", "En preparación", "Listo", "En camino", "Entregado", "Cancelado"];
 const periods = [{days:1,label:"Hoy"},{days:7,label:"7 días"},{days:15,label:"15 días"},{days:30,label:"30 días"}] as const;
 const productIcons=["🍔","🌭","🍕","🍗","🥩","🍟","🌮","🌯","🥪","🥗","🍝","🍜","🍚","🍲","🍰","🍩","🍦","🥤","☕","🍺","🍽️"];
 const ago = (date: string) => {
@@ -202,6 +202,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
     notes: "",
     items: {},
   });
+  const renderOrder=(order:Order)=><OrderCard order={order} saving={saving} onStatus={(status) => action("orderStatus", { id: order.id, status })} onPaymentStatus={(status)=>action("paymentStatus",{id:order.id,status})} onQuote={(fee,estimatedMinutes)=>action("quoteDelivery",{id:order.id,fee,estimatedMinutes},"Domicilio cotizado.")} onConfirm={()=>action("confirmDelivery",{id:order.id},"Domicilio confirmado.")} onAcknowledge={()=>action("acknowledgeOrder",{id:order.id})} onDelete={session.role==="Superadministrador"?async()=>{if(window.confirm(`¿Eliminar definitivamente el pedido #${order.id}? Esta acción no se puede deshacer.`))await action("deleteOrder",{id:order.id},"Pedido eliminado definitivamente.")}:undefined} key={order.id}/>;
 
   return <main className="admin-shell">
     <aside className="sidebar">
@@ -242,10 +243,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
           {(data.orders.some(order=>order.modified))&&<div className="change-alert"><span>!</span><div><strong>{data.orders.filter(order=>order.modified).length} pedido(s) modificado(s)</strong><p>El cliente agregó productos o cambió su ubicación. El pedido original fue actualizado.</p></div></div>}
           <div className="section-title"><div><h2>Pedidos en vivo</h2><p>Se actualizan automáticamente cada 10 segundos</p></div><button onClick={() => setManualOrder(newManualOrder())}>＋ Nuevo pedido</button></div>
           <div className="order-filters"><label>Estado<select value={orderFilter} onChange={e=>setOrderFilter(e.target.value as typeof orderFilter)}><option>Activos</option>{statuses.map(status=><option key={status}>{status}</option>)}<option>Todos</option></select></label><label>Ubicación<select value={locationFilter} onChange={e=>setLocationFilter(e.target.value)}><option>Todas</option>{Array.from(new Set(data.orders.map(order=>order.locationName))).map(location=><option key={location}>{location}</option>)}</select></label><button className={modifiedOnly?"active":""} onClick={()=>setModifiedOnly(value=>!value)}>↻ Solo modificados ({data.orders.filter(order=>order.modified).length})</button>{(orderFilter!=="Activos"||locationFilter!=="Todas"||modifiedOnly)&&<button onClick={()=>{setOrderFilter("Activos");setLocationFilter("Todas");setModifiedOnly(false)}}>Limpiar filtros</button>}</div>
-          <div className="orders">{filteredOrders.length === 0
-            ? <div className="empty-state">Todavía no hay pedidos activos.<button onClick={() => setManualOrder(newManualOrder())}>Crear pedido manual</button></div>
-            : filteredOrders.map((order) => <OrderCard order={order} saving={saving} onStatus={(status) => action("orderStatus", { id: order.id, status })} onPaid={(paid)=>action("orderPaid",{id:order.id,paid})} onAcknowledge={()=>action("acknowledgeOrder",{id:order.id})} onDelete={session.role==="Superadministrador"?async()=>{if(window.confirm(`¿Eliminar definitivamente el pedido #${order.id}? Esta acción no se puede deshacer.`))await action("deleteOrder",{id:order.id},"Pedido eliminado definitivamente.")}:undefined} key={order.id} />)}
-          </div>
+          {filteredOrders.length===0?<div className="empty-state">Todavía no hay pedidos activos.<button onClick={() => setManualOrder(newManualOrder())}>Crear pedido manual</button></div>:<div className="order-board"><section><header>Nuevos <b>{filteredOrders.filter(order=>order.status==="Nuevo").length}</b></header>{filteredOrders.filter(order=>order.status==="Nuevo").map(renderOrder)}</section><section><header>En preparación <b>{filteredOrders.filter(order=>["Aceptado","En preparación"].includes(order.status)).length}</b></header>{filteredOrders.filter(order=>["Aceptado","En preparación"].includes(order.status)).map(renderOrder)}</section><section><header>Listos / En camino <b>{filteredOrders.filter(order=>["Listo","En camino"].includes(order.status)).length}</b></header>{filteredOrders.filter(order=>["Listo","En camino"].includes(order.status)).map(renderOrder)}</section>{filteredOrders.some(order=>["Entregado","Cancelado"].includes(order.status))&&<section><header>Finalizados</header>{filteredOrders.filter(order=>["Entregado","Cancelado"].includes(order.status)).map(renderOrder)}</section>}</div>}
         </>}
 
         {section === "products" && <>
@@ -325,15 +323,19 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
   </main>;
 }
 
-function OrderCard({ order, saving, onStatus,onPaid,onAcknowledge,onDelete }: { order: Order; saving: boolean; onStatus: (status: OrderStatus) => void; onPaid:(paid:boolean)=>void; onAcknowledge:()=>void;onDelete?:()=>void }) {
+function OrderCard({ order, saving, onStatus,onPaymentStatus,onQuote,onConfirm,onAcknowledge,onDelete }: { order: Order; saving: boolean; onStatus: (status: OrderStatus) => void; onPaymentStatus:(status:string)=>void;onQuote:(fee:number,estimatedMinutes:number)=>void;onConfirm:()=>void; onAcknowledge:()=>void;onDelete?:()=>void }) {
+  const customerWhatsapp=order.customerPhone.replace(/\D/g,"");
+  const quoteMessage=order.deliveryFee===null?"":encodeURIComponent(`Hola ${order.customerName}, el domicilio de su pedido #${order.id} hasta ${order.neighborhood} cuesta ${money(order.deliveryFee)}. El total es ${money(order.total)}${order.estimatedMinutes?` y el tiempo estimado es de ${order.estimatedMinutes} minutos`:""}. ¿Desea confirmar el pedido?`);
   return <article className={`order ${order.status === "Nuevo" ? "urgent" : ""} ${order.modified?"modified-order":""}`}>
-    <div className="order-head"><div><span>#{order.id}</span><strong>{order.locationName}</strong>{order.modified&&<b className="modified-badge">MODIFICADO</b>}</div><small>{ago(order.updatedAt||order.createdAt)}</small></div>
+    <div className="order-head"><div><span>#{order.id}</span><strong>{order.locationName}</strong>{order.orderType!=="Local"&&<b className="order-type-badge">{order.orderType}</b>}{order.modified&&<b className="modified-badge">MODIFICADO</b>}</div><small>{ago(order.updatedAt||order.createdAt)}</small></div>
     <h3>{order.customerName}</h3>
+    {order.orderType!=="Local"&&<div className="delivery-admin-data"><span>☎ {order.customerPhone}</span>{order.orderType==="Domicilio"&&<><span>⌖ {order.address}, {order.neighborhood}</span>{order.addressReference&&<span>Referencia: {order.addressReference}</span>}</>}<span>Pago: {order.paymentMethod} · {order.paymentStatus}</span></div>}
     <div className="order-lines">{order.items.map((item,index)=><div className="order-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}</span><span>{money(item.unitPrice)}</span><strong>{money(item.unitPrice*item.quantity)}</strong></div>)}</div>
     {order.notes && <small className="order-note"><b>Datos del pedido:</b>{"\n"}{order.notes}</small>}
     {order.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{order.updateNote}</span><button disabled={saving} onClick={onAcknowledge}>Marcar revisado</button></div>}
     {order.packagingTotal>0&&<div className="packaging-summary"><span>Recipientes</span><strong>{money(order.packagingTotal)}</strong></div>}
-    <div className="order-foot"><div><small>Total para cobrar</small><strong>{money(order.total)}</strong></div><button className={`paid-button ${order.paid?"paid":""}`} disabled={saving} onClick={()=>onPaid(!order.paid)}>{order.paid?"✓ Cobrado":"Marcar cobrado"}</button><select className={`status status-${statuses.indexOf(order.status)}`} value={order.status} disabled={saving} onChange={(event) => onStatus(event.target.value as OrderStatus)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{onDelete&&<button className="delete-order" disabled={saving} onClick={onDelete}>Eliminar pedido</button>}</div>
+    {order.orderType==="Domicilio"&&<div className="delivery-quote-admin"><b>{order.deliveryFee===null?"Domicilio por cotizar":`Domicilio: ${money(order.deliveryFee)}`}</b>{order.estimatedMinutes&&<small>{order.estimatedMinutes} min estimados</small>}<button disabled={saving} onClick={()=>{const fee=Number(window.prompt("Valor del domicilio",String(order.deliveryFee??"")));if(!Number.isFinite(fee))return;const minutes=Number(window.prompt("Tiempo estimado en minutos",String(order.estimatedMinutes??30)));if(Number.isFinite(minutes))onQuote(fee,minutes)}}>{order.deliveryFee===null?"Cotizar domicilio":"Cambiar tarifa"}</button>{order.deliveryFee!==null&&customerWhatsapp&&<a href={`https://wa.me/${customerWhatsapp}?text=${quoteMessage}`} target="_blank" rel="noreferrer">Enviar cotización por WhatsApp</a>}{order.deliveryFee!==null&&order.deliveryQuoteStatus!=="Confirmado"&&<button onClick={onConfirm}>Cliente confirmó</button>}</div>}
+    <div className="order-foot"><div><small>Total para cobrar</small><strong>{money(order.total)}</strong></div><select className="payment-status" value={order.paymentStatus} disabled={saving} onChange={event=>onPaymentStatus(event.target.value)}><option>Pendiente</option>{order.paymentMethod==="Transferencia"&&<option>Transferencia por verificar</option>}<option>Verificado</option></select><select className={`status status-${statuses.indexOf(order.status)}`} value={order.status} disabled={saving} onChange={(event) => onStatus(event.target.value as OrderStatus)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{onDelete&&<button className="delete-order" disabled={saving} onClick={onDelete}>Eliminar pedido</button>}</div>
   </article>;
 }
 

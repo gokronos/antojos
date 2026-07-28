@@ -11,7 +11,7 @@ type Settings = { name: string; tagline: string; welcomeMessage: string; accepti
 type Banner = { id:number; eyebrow:string; title:string; text:string; image:string; active:boolean; position:number };
 type ScheduleDay = { weekday:number; day:string; openTime:string; closeTime:string; enabled:boolean };
 type InstallPrompt = Event & { prompt: () => Promise<void> };
-type ActiveOrder = { id:number; locationId:number; locationName:string; customerName:string; notes:string; total:number; status:"Nuevo"|"Aceptado"|"En preparación"|"Entregado"; paid:boolean; items:{productId:number;productName:string;unitPrice:number;quantity:number}[] };
+type ActiveOrder = { id:number; locationId:number; locationName:string; customerName:string; notes:string; total:number; packagingTotal:number; orderType:string; customerPhone:string; address:string; neighborhood:string; addressReference:string; paymentMethod:string; paymentStatus:string; deliveryFee:number|null; deliveryQuoteStatus:string; estimatedMinutes:number|null; status:"Nuevo"|"Aceptado"|"En preparación"|"Listo"|"En camino"|"Entregado"; paid:boolean; items:{productId:number;productName:string;unitPrice:number;quantity:number}[] };
 type ServiceRequestType = "Llamar al mesero" | "Pedir la cuenta" | "Cubiertos o servilletas" | "Reportar un inconveniente" | "Otra solicitud";
 
 const money = (n: number) => new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n);
@@ -83,6 +83,13 @@ export default function Home() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
+  useEffect(()=>{
+    try {
+      const saved=JSON.parse(window.localStorage.getItem("antojos-customer-data")??"null");
+      if(saved){setName(saved.name??"");setCustomerPhone(saved.phone??"");setAddress(saved.address??"");setNeighborhood(saved.neighborhood??"");setAddressReference(saved.reference??"");}
+    } catch {}
+  },[]);
+
   const refreshActiveOrder=useCallback(async()=>{
     const token=window.localStorage.getItem("antojos-active-order");
     if(!token) return;
@@ -130,6 +137,7 @@ export default function Home() {
   const todaySchedule=schedule.find((day) => day.weekday===colombiaDay);
   const nowTime=new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Bogota"});
   const isOpenNow=Boolean(settings.acceptingOrders&&todaySchedule?.enabled&&nowTime>=todaySchedule.openTime&&nowTime<todaySchedule.closeTime);
+  const customerProgressStatus=activeOrder&&["Listo","En camino"].includes(activeOrder.status)?"En preparación":activeOrder?.status;
   const themeStyle={"--green":settings.primaryColor,"--lime":settings.accentColor,"--cream":settings.backgroundColor} as CSSProperties;
   const add = (product: Product) => {
     if (!isOpenNow) return;
@@ -143,6 +151,14 @@ export default function Home() {
   const changeQty = (id: number, delta: number) => setCart((current) =>
     current.map((item) => item.id === id ? { ...item, qty: item.qty + delta } : item).filter((item) => item.qty > 0)
   );
+  const repeatLastOrder=()=>{
+    try {
+      const saved=JSON.parse(window.localStorage.getItem("antojos-last-order")??"[]") as {productId:number;quantity:number}[];
+      const repeated=saved.map(item=>{const product=products.find(candidate=>candidate.id===item.productId);return product?{...product,qty:item.quantity}:null;}).filter((item):item is CartItem=>Boolean(item));
+      if(!repeated.length){setError("No hay un pedido anterior disponible para repetir.");return;}
+      setCart(repeated);setError("");document.querySelector(".menu-area")?.scrollIntoView();
+    } catch {setError("No fue posible recuperar el pedido anterior.");}
+  };
 
   async function submitOrder() {
     if (!isOpenNow) {
@@ -185,24 +201,16 @@ export default function Home() {
           notes: deliveryDetails,
           locationId,
           items: cart.map((item) => ({ productId: item.id, quantity: item.qty })), token,
+          customerPhone,address,neighborhood,addressReference,paymentMethod,
         }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       setCheckout(false);
       if(result.customerToken) window.localStorage.setItem("antojos-active-order",result.customerToken);
-      const whatsappText=isDelivery?[
-        `Hola, quiero confirmar el pedido #${result.id}.`,
-        `Cliente: ${name.trim()}`,
-        ...cart.map(item=>`${item.qty}× ${item.name} - ${money(item.price*item.qty)}`),
-        result.packagingTotal?`Recipientes: ${money(result.packagingTotal)}`:"",
-        `Total: ${money(result.total)}`,
-        `Dirección: ${address.trim()}, ${neighborhood.trim()}`,
-        addressReference.trim()?`Referencia: ${addressReference.trim()}`:"",
-        `Teléfono: ${customerPhone.trim()}`,
-        `Forma de pago: ${paymentMethod}`,
-      ].filter(Boolean).join("\n"):undefined;
-      setSuccess({ id: result.id, locationName: result.locationName, whatsappUrl:whatsappText?`https://wa.me/573138866453?text=${encodeURIComponent(whatsappText)}`:undefined });
+      window.localStorage.setItem("antojos-customer-data",JSON.stringify({name:name.trim(),phone:customerPhone.trim(),address:address.trim(),neighborhood:neighborhood.trim(),reference:addressReference.trim()}));
+      window.localStorage.setItem("antojos-last-order",JSON.stringify(cart.map(item=>({productId:item.id,quantity:item.qty}))));
+      setSuccess({ id: result.id, locationName: result.locationName });
       setCart([]);
       setNotes("");
       setCashAmount("");setPickupTime("");setAddress("");setNeighborhood("");setAddressReference("");
@@ -262,9 +270,9 @@ export default function Home() {
         <div><span className="eyebrow">{currentBanner?.eyebrow||"BIENVENIDOS"} · {(location?.name ?? "SELECCIONE SU MESA").toUpperCase()}</span><h1>{currentBanner?.title||"¿Qué se le antoja comer hoy?"}</h1><p>{currentBanner?.text||settings.welcomeMessage}</p>{!isOpenNow && <b className="closed-banner">El local está cerrado · Puede consultar el menú</b>}{banners.length>1&&<div className="banner-controls"><button onClick={()=>setBannerIndex((index)=>(index-1+banners.length)%banners.length)}>←</button><span>{banners.map((banner,index)=><i className={index===bannerIndex%banners.length?"active":""} key={banner.id}/>)}</span><button onClick={()=>setBannerIndex((index)=>(index+1)%banners.length)}>→</button></div>}</div>
         {!currentBanner?.image&&<div className="hero-dish"><span>🍔</span><i>100%<br /><small>artesanal</small></i></div>}
       </section>
-      {activeOrder&&<section className="active-order-wrap"><div className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.status}{activeOrder.paid?" · Cobrado":""}</strong><p>{activeOrder.items.reduce((sum,item)=>sum+item.quantity,0)} productos · {activeOrder.locationName} · {money(activeOrder.total)}</p></div></div><div className="order-progress">{["Nuevo","Aceptado","En preparación","Entregado"].map((status,index)=><span className={["Nuevo","Aceptado","En preparación","Entregado"].indexOf(activeOrder.status)>=index?"done":""} key={status}><i>{index===0?"●":"✓"}</i><small>{status}</small></span>)}</div><div className="active-actions"><button onClick={()=>setOrderDetailOpen(value=>!value)}>{orderDetailOpen?"Ocultar detalle":"Ver mi pedido"}</button><button disabled={!isOpenNow} onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar productos</button><button disabled={!isOpenNow} onClick={()=>setCheckout(true)}>✎ Cambiar ubicación</button></div></div>{orderDetailOpen&&<div className="customer-order-detail"><div className="customer-detail-head"><div><small>SU CUENTA</small><h3>Detalle del pedido</h3></div><span>{activeOrder.paid?"✓ Pagado":"Pago pendiente"}</span></div>{activeOrder.items.map((item,index)=><div className="customer-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}<small>{money(item.unitPrice)} cada uno</small></span><strong>{money(item.quantity*item.unitPrice)}</strong></div>)}<div className="customer-total"><span>Total</span><strong>{money(activeOrder.total)}</strong></div>{activeOrder.status==="Entregado"&&activeOrder.paid?<button className="finish-order" onClick={finishOrder}>Confirmar recibido y finalizar</button>:<p className="finish-help">Puede seguir agregando productos al mismo pedido. Podrá finalizar cuando el local lo marque entregado y cobrado.</p>}</div>}</section>}
+      {activeOrder&&<section className="active-order-wrap"><div className="active-order"><div className="active-order-copy"><span className="pulse-dot"/><div><small>PEDIDO ACTIVO · #{activeOrder.id}</small><strong>{activeOrder.orderType==="Domicilio"&&activeOrder.deliveryQuoteStatus==="Por cotizar"?"Domicilio por cotizar":activeOrder.status}{activeOrder.paid?" · Cobrado":""}</strong><p>{activeOrder.items.reduce((sum,item)=>sum+item.quantity,0)} productos · {activeOrder.locationName} · {money(activeOrder.total)}</p></div></div><div className="order-progress">{["Nuevo","Aceptado","En preparación","Entregado"].map((status,index)=><span className={["Nuevo","Aceptado","En preparación","Entregado"].indexOf(customerProgressStatus??"Nuevo")>=index?"done":""} key={status}><i>{index===0?"●":"✓"}</i><small>{status}</small></span>)}</div><div className="active-actions"><button onClick={()=>setOrderDetailOpen(value=>!value)}>{orderDetailOpen?"Ocultar detalle":"Ver mi pedido"}</button><button disabled={!isOpenNow} onClick={()=>document.querySelector(".menu-area")?.scrollIntoView()}>＋ Agregar productos</button><button disabled={!isOpenNow} onClick={()=>setCheckout(true)}>✎ Cambiar ubicación</button></div></div>{orderDetailOpen&&<div className="customer-order-detail"><div className="customer-detail-head"><div><small>SU CUENTA</small><h3>Detalle del pedido</h3></div><span>{activeOrder.paymentStatus==="Verificado"?"✓ Pago verificado":activeOrder.paymentStatus}</span></div>{activeOrder.items.map((item,index)=><div className="customer-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}<small>{money(item.unitPrice)} cada uno</small></span><strong>{money(item.quantity*item.unitPrice)}</strong></div>)}{activeOrder.packagingTotal>0&&<div className="customer-line"><span>Recipientes</span><strong>{money(activeOrder.packagingTotal)}</strong></div>}{activeOrder.orderType==="Domicilio"&&<div className="delivery-customer-status"><b>{activeOrder.deliveryFee===null?"Tarifa de domicilio por confirmar":`Domicilio: ${money(activeOrder.deliveryFee)}`}</b>{activeOrder.estimatedMinutes&&<small>Tiempo estimado: {activeOrder.estimatedMinutes} minutos</small>}</div>}<div className="customer-total"><span>Total</span><strong>{money(activeOrder.total)}</strong></div>{activeOrder.status==="Entregado"&&activeOrder.paid?<button className="finish-order" onClick={finishOrder}>Confirmar recibido y finalizar</button>:<p className="finish-help">Puede seguir el estado aquí. El restaurante le escribirá por WhatsApp si debe confirmar la tarifa del domicilio.</p>}</div>}</section>}
       <section className="menu-area">
-        <div className="menu-tools"><div><h2>Nuestro menú</h2><p>Todo preparado al momento</p></div><label className="search">⌕<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar en el menú" /></label></div>
+        <div className="menu-tools"><div><h2>Nuestro menú</h2><p>Todo preparado al momento</p></div><div className="menu-customer-actions"><button onClick={repeatLastOrder}>↻ Pedir lo mismo</button><button onClick={()=>{window.localStorage.removeItem("antojos-customer-data");setName("");setCustomerPhone("");setAddress("");setNeighborhood("");setAddressReference("")}}>Borrar mis datos</button><label className="search">⌕<input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar en el menú" /></label></div></div>
         {loading && <div className="system-message">Cargando el menú…</div>}
         {error && <div className="system-message error-message">{error}</div>}
         {!loading && !error && <>
