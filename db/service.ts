@@ -6,6 +6,7 @@ export type ProductRecord = {
   name: string;
   description: string;
   price: number;
+  packagingFee: number;
   category: string;
   icon: string;
   images: string[];
@@ -83,6 +84,7 @@ export async function ensureDatabase() {
         icon TEXT NOT NULL DEFAULT '🍽️', active BOOLEAN NOT NULL DEFAULT TRUE
       )`;
       await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb`;
+      await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS packaging_fee INTEGER NOT NULL DEFAULT 0 CHECK (packaging_fee >= 0)`;
       await sql`CREATE TABLE IF NOT EXISTS locations (
         id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE,
         type TEXT NOT NULL CHECK (type IN ('Mesa','Barra','Otro')),
@@ -103,6 +105,7 @@ export async function ensureDatabase() {
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS update_note TEXT NOT NULL DEFAULT ''`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_token TEXT`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_closed BOOLEAN NOT NULL DEFAULT FALSE`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS packaging_total INTEGER NOT NULL DEFAULT 0`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_customer_token ON orders(customer_token) WHERE customer_token IS NOT NULL`;
       await sql`UPDATE orders SET status='En preparación' WHERE status IN ('Preparando','Listo')`;
       await sql`CREATE TABLE IF NOT EXISTS order_items (
@@ -210,7 +213,7 @@ export async function publicData() {
   await ensureDatabase();
   const sql = database();
   const [products, locations, [settings], banners, schedule] = await Promise.all([
-    sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products WHERE active = TRUE ORDER BY category, id`,
+    sql<ProductRecord[]>`SELECT id::int, name, description, price, packaging_fee AS "packagingFee", category, icon, images, active FROM products WHERE active = TRUE ORDER BY category, id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations WHERE active = TRUE ORDER BY id`,
     sql<RestaurantSettings[]>`SELECT name, tagline, welcome_message AS "welcomeMessage", currency, accepting_orders AS "acceptingOrders",
       logo, primary_color AS "primaryColor", accent_color AS "accentColor", background_color AS "backgroundColor",
@@ -256,7 +259,7 @@ export async function createOrder(input: {
   if (!customerName || !Number.isInteger(input.locationId) || !input.items.length) throw new Error("Pedido incompleto.");
   const [settings] = await sql<{ acceptingOrders: boolean }[]>`SELECT accepting_orders AS "acceptingOrders" FROM restaurant_settings WHERE id = 1`;
   if (settings && !settings.acceptingOrders) throw new Error("El local no está recibiendo pedidos en este momento.");
-  const [location] = await sql<{ id: number; name: string }[]>`SELECT id::int, name FROM locations WHERE id = ${input.locationId} AND active = TRUE`;
+  const [location] = await sql<{ id: number; name: string; type: string }[]>`SELECT id::int, name, type FROM locations WHERE id = ${input.locationId} AND active = TRUE`;
   if (!location) throw new Error("La ubicación seleccionada no está disponible.");
   const quantities = new Map<number, number>();
   for (const item of input.items) {
@@ -264,16 +267,19 @@ export async function createOrder(input: {
     quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
   }
   const ids = [...quantities.keys()];
-  const products = await sql<{ id: number; name: string; price: number }[]>`
-    SELECT id::int, name, price FROM products WHERE active = TRUE AND id IN ${sql(ids)}
+  const products = await sql<{ id: number; name: string; price: number; packagingFee: number }[]>`
+    SELECT id::int, name, price, packaging_fee AS "packagingFee" FROM products WHERE active = TRUE AND id IN ${sql(ids)}
   `;
   if (products.length !== ids.length) throw new Error("Uno de los productos ya no está disponible.");
-  const total = products.reduce((sum, product) => sum + product.price * (quantities.get(product.id) ?? 0), 0);
+  const productsTotal = products.reduce((sum, product) => sum + product.price * (quantities.get(product.id) ?? 0), 0);
+  const needsPackaging = location.type === "Otro" && (location.name.toLowerCase().includes("llevar") || location.name.toLowerCase().includes("domicilio"));
+  const packagingTotal = needsPackaging ? products.reduce((sum, product) => sum + product.packagingFee * (quantities.get(product.id) ?? 0), 0) : 0;
+  const total = productsTotal + packagingTotal;
   return sql.begin(async (transaction) => {
     const customerToken = crypto.randomUUID();
     const [created] = await transaction<{ id: number }[]>`
-      INSERT INTO orders (location_id, location_name, customer_name, notes, total, customer_token)
-      VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total}, ${customerToken})
+      INSERT INTO orders (location_id, location_name, customer_name, notes, total, packaging_total, customer_token)
+      VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total}, ${packagingTotal}, ${customerToken})
       RETURNING id::int
     `;
     for (const product of products) {
@@ -282,7 +288,7 @@ export async function createOrder(input: {
         VALUES (${created.id}, ${product.id}, ${product.name}, ${product.price}, ${quantities.get(product.id) ?? 0})
       `;
     }
-    return { id: created.id, total, locationName: location.name, status: "Nuevo" as const, customerToken };
+    return { id: created.id, total, productsTotal, packagingTotal, locationName: location.name, status: "Nuevo" as const, customerToken };
   });
 }
 
@@ -310,12 +316,12 @@ export async function updateCustomerOrder(token: string, input: {
 }) {
   await ensureDatabase();
   const sql = database();
-  const [order] = await sql<{id:number;locationName:string;total:number;status:string}[]>`
-    SELECT id::int, location_name AS "locationName", total, status FROM orders
+  const [order] = await sql<{id:number;locationName:string;total:number;packagingTotal:number;status:string}[]>`
+    SELECT id::int, location_name AS "locationName", total, packaging_total AS "packagingTotal", status FROM orders
     WHERE customer_token=${token} AND customer_closed=FALSE`;
   if (!order || ["Entregado","Cancelado"].includes(order.status)) throw new Error("Este pedido ya no se puede modificar.");
   if (!input.items?.length && input.locationId === undefined) throw new Error("No hay cambios para guardar.");
-  const [location] = await sql<{id:number;name:string}[]>`SELECT id::int,name FROM locations WHERE id=${input.locationId} AND active=TRUE`;
+  const [location] = await sql<{id:number;name:string;type:string}[]>`SELECT id::int,name,type FROM locations WHERE id=${input.locationId} AND active=TRUE`;
   if (!location) throw new Error("La ubicación seleccionada no está disponible.");
   const quantities = new Map<number,number>();
   for (const item of input.items) {
@@ -323,9 +329,12 @@ export async function updateCustomerOrder(token: string, input: {
     quantities.set(item.productId,(quantities.get(item.productId)??0)+item.quantity);
   }
   const ids=[...quantities.keys()];
-  const products=ids.length?await sql<{id:number;name:string;price:number}[]>`SELECT id::int,name,price FROM products WHERE active=TRUE AND id IN ${sql(ids)}`:[];
+  const products=ids.length?await sql<{id:number;name:string;price:number;packagingFee:number}[]>`SELECT id::int,name,price,packaging_fee AS "packagingFee" FROM products WHERE active=TRUE AND id IN ${sql(ids)}`:[];
   if(products.length!==ids.length) throw new Error("Uno de los productos ya no está disponible.");
-  const addition=products.reduce((sum,p)=>sum+p.price*(quantities.get(p.id)??0),0);
+  const productAddition=products.reduce((sum,p)=>sum+p.price*(quantities.get(p.id)??0),0);
+  const needsPackaging=location.type==="Otro"&&(location.name.toLowerCase().includes("llevar")||location.name.toLowerCase().includes("domicilio"));
+  const packagingAddition=needsPackaging?products.reduce((sum,p)=>sum+p.packagingFee*(quantities.get(p.id)??0),0):0;
+  const addition=productAddition+packagingAddition;
   const additions=products.map(p=>`${quantities.get(p.id)}× ${p.name}`).join(", ");
   const locationChange=location.name!==order.locationName?` · Ubicación: ${order.locationName} → ${location.name}`:"";
   const updateNote=[additions?`Agregó: ${additions}`:"",locationChange.replace(/^ · /,"")].filter(Boolean).join(" · ")||"El cliente actualizó los datos del pedido";
@@ -338,9 +347,9 @@ export async function updateCustomerOrder(token: string, input: {
     }
     await transaction`UPDATE orders SET location_id=${location.id},location_name=${location.name},
       customer_name=${input.customerName.trim().slice(0,80)},notes=${(input.notes??"").trim().slice(0,500)},
-      total=${order.total+addition},paid=FALSE,modified=TRUE,
+      total=${order.total+addition},packaging_total=${order.packagingTotal+packagingAddition},paid=FALSE,modified=TRUE,
       update_note=${updateNote},updated_at=NOW() WHERE id=${order.id}`;
-    return {id:order.id,total:order.total+addition,locationName:location.name,status:order.status};
+    return {id:order.id,total:order.total+addition,packagingTotal:order.packagingTotal+packagingAddition,locationName:location.name,status:order.status};
   });
 }
 
@@ -384,9 +393,9 @@ export async function adminData(periodDays = 1) {
   const sql = database();
   const days = [1, 7, 15, 30].includes(periodDays) ? periodDays : 1;
   const [products, locations, orders, items, serviceRequests, [stats], [settings], banners, schedule, categories, users] = await Promise.all([
-    sql<ProductRecord[]>`SELECT id::int, name, description, price, category, icon, images, active FROM products ORDER BY id`,
+    sql<ProductRecord[]>`SELECT id::int, name, description, price, packaging_fee AS "packagingFee", category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
-    sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, status, paid, modified, update_note, customer_closed, created_at, updated_at FROM orders ORDER BY created_at DESC LIMIT 100`,
+    sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, packaging_total, status, paid, modified, update_note, customer_closed, created_at, updated_at FROM orders ORDER BY created_at DESC LIMIT 100`,
     sql<Record<string, unknown>[]>`SELECT order_id::int, product_id::int, product_name, unit_price, quantity FROM order_items WHERE order_id IN (SELECT id FROM orders ORDER BY created_at DESC LIMIT 100) ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int,location_id::int,location_name,customer_name,request_type,note,status,created_at,attended_at
       FROM service_requests WHERE created_at > NOW() - INTERVAL '24 hours' ORDER BY status DESC,created_at DESC LIMIT 100`,
@@ -410,7 +419,7 @@ export async function adminData(periodDays = 1) {
     locations,
     orders: orders.map((order) => ({
       id: order.id, locationId: order.location_id, locationName: order.location_name,
-      customerName: order.customer_name, notes: order.notes, total: order.total,
+      customerName: order.customer_name, notes: order.notes, total: order.total, packagingTotal:order.packaging_total,
       status: order.status, paid:order.paid, modified:order.modified, updateNote:order.update_note,
       customerClosed:order.customer_closed, createdAt: order.created_at, updatedAt:order.updated_at,
       items: items.filter((item) => item.order_id === order.id).map((item) => ({
@@ -505,13 +514,14 @@ export async function saveProduct(input: Partial<ProductRecord> & { name: string
   const icon = (input.icon ?? "🍽️").slice(0, 12);
   const images = (input.images ?? []).filter((image) => typeof image === "string" && image.startsWith("data:image/")).slice(0, 5);
   const price = Math.round(input.price);
+  const packagingFee = Math.max(0, Math.round(input.packagingFee ?? 0));
   const active = input.active !== false;
   if (!name || !category || !Number.isFinite(price) || price < 0) throw new Error("Datos de producto inválidos.");
   if (input.id) {
-    await sql`UPDATE products SET name=${name}, description=${description}, price=${price}, category=${category}, icon=${icon}, images=${sql.json(images)}, active=${active} WHERE id=${input.id}`;
+    await sql`UPDATE products SET name=${name}, description=${description}, price=${price}, packaging_fee=${packagingFee}, category=${category}, icon=${icon}, images=${sql.json(images)}, active=${active} WHERE id=${input.id}`;
     return { id: input.id };
   }
-  const [row] = await sql<{ id: number }[]>`INSERT INTO products (name,description,price,category,icon,images,active) VALUES (${name},${description},${price},${category},${icon},${sql.json(images)},${active}) RETURNING id::int`;
+  const [row] = await sql<{ id: number }[]>`INSERT INTO products (name,description,price,packaging_fee,category,icon,images,active) VALUES (${name},${description},${price},${packagingFee},${category},${icon},${sql.json(images)},${active}) RETURNING id::int`;
   return row;
 }
 
