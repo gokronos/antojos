@@ -35,10 +35,17 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
   const [checkout, setCheckout] = useState(false);
-  const [success, setSuccess] = useState<{ id: number; locationName: string } | null>(null);
+  const [success, setSuccess] = useState<{ id: number; locationName: string; whatsappUrl?: string } | null>(null);
   const [locationId, setLocationId] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
+  const [customerPhone,setCustomerPhone]=useState("");
+  const [paymentMethod,setPaymentMethod]=useState("Efectivo");
+  const [cashAmount,setCashAmount]=useState("");
+  const [pickupTime,setPickupTime]=useState("");
+  const [address,setAddress]=useState("");
+  const [neighborhood,setNeighborhood]=useState("");
+  const [addressReference,setAddressReference]=useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -111,6 +118,9 @@ export default function Home() {
     `${p.name} ${p.description}`.toLowerCase().includes(search.toLowerCase())
   );
   const location = locations.find((l) => l.id === locationId);
+  const locationKind=location?.name.toLowerCase()??"";
+  const isTakeaway=locationKind.includes("llevar");
+  const isDelivery=locationKind.includes("domicilio");
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const count = cart.reduce((sum, item) => sum + item.qty, 0);
   const currentBanner=banners[bannerIndex%banners.length];
@@ -139,16 +149,38 @@ export default function Home() {
       return;
     }
     if (!name.trim() || (!cart.length && !activeOrder) || !locationId) return;
+    if ((isTakeaway || isDelivery) && customerPhone.replace(/\D/g,"").length < 7) {
+      setError("Escriba un número de teléfono válido.");
+      return;
+    }
+    if (isTakeaway && !pickupTime) {
+      setError("Seleccione la hora aproximada de recogida.");
+      return;
+    }
+    if (isDelivery && (!address.trim() || !neighborhood.trim())) {
+      setError("Complete la dirección y el barrio para el domicilio.");
+      return;
+    }
     setSending(true);
     setError("");
     try {
       const token=window.localStorage.getItem("antojos-active-order");
+      const deliveryDetails=[
+        notes.trim(),
+        (isTakeaway||isDelivery)?`Teléfono: ${customerPhone.trim()}`:"",
+        isTakeaway?`Recogida aproximada: ${pickupTime}`:"",
+        isDelivery?`Dirección: ${address.trim()}`:"",
+        isDelivery?`Barrio: ${neighborhood.trim()}`:"",
+        isDelivery&&addressReference.trim()?`Referencia: ${addressReference.trim()}`:"",
+        (isTakeaway||isDelivery)?`Forma de pago: ${paymentMethod}`:"",
+        paymentMethod==="Efectivo"&&cashAmount?`Paga con: ${money(Number(cashAmount))}`:"",
+      ].filter(Boolean).join("\n");
       const response = await fetch("/api/orders", {
         method: activeOrder&&token?"PATCH":"POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerName: name,
-          notes,
+          notes: deliveryDetails,
           locationId,
           items: cart.map((item) => ({ productId: item.id, quantity: item.qty })), token,
         }),
@@ -157,9 +189,20 @@ export default function Home() {
       if (!response.ok) throw new Error(result.error);
       setCheckout(false);
       if(result.customerToken) window.localStorage.setItem("antojos-active-order",result.customerToken);
-      setSuccess({ id: result.id, locationName: result.locationName });
+      const whatsappText=isDelivery?[
+        `Hola, quiero confirmar el pedido #${result.id}.`,
+        `Cliente: ${name.trim()}`,
+        ...cart.map(item=>`${item.qty}× ${item.name} - ${money(item.price*item.qty)}`),
+        `Total: ${money(result.total)}`,
+        `Dirección: ${address.trim()}, ${neighborhood.trim()}`,
+        addressReference.trim()?`Referencia: ${addressReference.trim()}`:"",
+        `Teléfono: ${customerPhone.trim()}`,
+        `Forma de pago: ${paymentMethod}`,
+      ].filter(Boolean).join("\n"):undefined;
+      setSuccess({ id: result.id, locationName: result.locationName, whatsappUrl:whatsappText?`https://wa.me/573138866453?text=${encodeURIComponent(whatsappText)}`:undefined });
       setCart([]);
       setNotes("");
+      setCashAmount("");setPickupTime("");setAddress("");setNeighborhood("");setAddressReference("");
       await refreshActiveOrder();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No fue posible enviar el pedido.");
@@ -227,15 +270,15 @@ export default function Home() {
         </>}
       </section>
       <footer className="business-footer"><div className="brand">{settings.logo?<img src={settings.logo} alt={settings.name}/>:<span>{settings.name.slice(0,2).toUpperCase()}</span>}<div>{settings.name}<small>{settings.tagline}</small></div></div><div className="footer-hours"><b>Horario de hoy</b><span>{todaySchedule?.enabled?`${todaySchedule.day}: ${todaySchedule.openTime} – ${todaySchedule.closeTime}`:`${todaySchedule?.day??"Hoy"}: Cerrado`}</span></div><div>{settings.address&&<span>⌖ {settings.address}</span>}{settings.phone&&<a href={`tel:${settings.phone.replace(/\s/g,"")}`}>☎ {settings.phone}</a>}{settings.whatsapp&&<a href={`https://wa.me/${settings.whatsapp}`} target="_blank" rel="noreferrer">WhatsApp</a>}{settings.mapUrl&&<a href={settings.mapUrl} target="_blank" rel="noreferrer">Ver ubicación ↗</a>}</div></footer>
-      {isOpenNow&&location&&!(location.type==="Otro"&&location.name.toLowerCase().includes("llevar"))&&<button className={`service-button ${count>0?"with-cart":""}`} onClick={()=>{setError("");setServiceOpen(true)}}><span>🔔</span><b>Solicitar atención</b></button>}
+      {isOpenNow&&location&&!(location.type==="Otro"&&(location.name.toLowerCase().includes("llevar")||location.name.toLowerCase().includes("domicilio")))&&<button className={`service-button ${count>0?"with-cart":""}`} onClick={()=>{setError("");setServiceOpen(true)}}><span>🔔</span><b>Solicitar atención</b></button>}
       {count > 0 && <button className="floating-cart" onClick={() => setCartOpen(true)}><span><b>{count}</b> Ver pedido</span><strong>{money(total)}</strong></button>}
       {cartOpen && <div className="drawer-back" onClick={() => setCartOpen(false)}><aside className="cart" onClick={(e) => e.stopPropagation()}><button className="close" onClick={() => setCartOpen(false)}>×</button><span className="eyebrow">SU PEDIDO</span><h2>Todo listo para ordenar</h2><p className="table-tag">📍 {location?.name ?? "Sin ubicación"}</p>
         <div className="cart-items">{cart.map((item) => <div key={item.id}><span>{item.icon}</span><div><strong>{item.name}</strong><small>{money(item.price)}</small></div><div className="qty"><button onClick={() => changeQty(item.id, -1)}>−</button><b>{item.qty}</b><button onClick={() => changeQty(item.id, 1)}>＋</button></div></div>)}</div>
         <div className="total"><span>Total</span><strong>{money(total)}</strong></div><button className="checkout-btn" disabled={!cart.length || !isOpenNow} onClick={() => { setCartOpen(false); setCheckout(true); }}>{isOpenNow ? "Revisar y ordenar →" : "Local cerrado"}</button>
       </aside></div>}
-      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea agregar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Los productos nuevos o el cambio de ubicación se guardarán en el mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>Mesa o lugar de entrega<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={500} /></label>{error && <div className="form-error error-message">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>{activeOrder?"Alerta de modificación":"Alerta al local"}</strong><small>{activeOrder?"El pedido original se actualizará sin crear una copia":"El pedido aparecerá inmediatamente en el panel"}</small></div></div><button className="checkout-btn" disabled={!isOpenNow || !name.trim() || sending || !locationId || (!activeOrder&&!cart.length)} onClick={submitOrder}>{!isOpenNow?"Local cerrado":sending ? "Enviando…" : `${activeOrder?"Actualizar":"Enviar"} pedido · ${money((activeOrder?.total??0)+total)}`}</button></div></div>}
+      {checkout && <div className="modal-back"><div className="checkout-modal"><button className="close" onClick={() => setCheckout(false)}>×</button><span className="eyebrow">{activeOrder?"ACTUALIZAR PEDIDO":"ÚLTIMO PASO"}</span><h2>{activeOrder?"¿Qué desea agregar?":"¿A nombre de quién?"}</h2><p>{activeOrder?"Los productos nuevos o el cambio de ubicación se guardarán en el mismo pedido.":"Así podremos identificar su pedido y llevarlo al lugar correcto."}</p><label>Nombre<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Andrea" maxLength={80} /></label><label>Mesa o lugar de entrega<select value={locationId ?? ""} onChange={(e) => setLocationId(Number(e.target.value))}>{locations.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>{(isTakeaway||isDelivery)&&<div className="delivery-fields"><strong>{isDelivery?"Datos del domicilio":"Datos para recoger"}</strong><small>Esta información llegará al panel del restaurante.</small><label>Teléfono del cliente<input type="tel" value={customerPhone} onChange={e=>setCustomerPhone(e.target.value)} placeholder="Ej. 313 123 4567" maxLength={30}/></label>{isTakeaway&&<label>Hora aproximada de recogida<input type="time" value={pickupTime} onChange={e=>setPickupTime(e.target.value)}/></label>}{isDelivery&&<><label>Dirección<input value={address} onChange={e=>setAddress(e.target.value)} placeholder="Calle, carrera, número..." maxLength={180}/></label><label>Barrio<input value={neighborhood} onChange={e=>setNeighborhood(e.target.value)} placeholder="Nombre del barrio" maxLength={100}/></label><label>Referencia de la vivienda<input value={addressReference} onChange={e=>setAddressReference(e.target.value)} placeholder="Casa blanca, apartamento 302..." maxLength={180}/></label></>}<label>Forma de pago<select value={paymentMethod} onChange={e=>setPaymentMethod(e.target.value)}><option>Efectivo</option><option>Transferencia</option><option>Pago en el local</option></select></label>{paymentMethod==="Efectivo"&&<label>¿Con cuánto paga?<input type="number" min="0" step="1000" value={cashAmount} onChange={e=>setCashAmount(e.target.value)} placeholder="Ej. 50000"/></label>}</div>}<label>Notas del pedido<textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Sin cebolla, salsa aparte..." maxLength={300} /></label>{error && <div className="form-error error-message">{error}</div>}<div className="pay-note"><span>🔔</span><div><strong>{activeOrder?"Alerta de modificación":"Alerta al local"}</strong><small>{isDelivery?"Después podrá confirmar el domicilio por WhatsApp":activeOrder?"El pedido original se actualizará sin crear una copia":"El pedido aparecerá inmediatamente en el panel"}</small></div></div><button className="checkout-btn" disabled={!isOpenNow || !name.trim() || sending || !locationId || (!activeOrder&&!cart.length)} onClick={submitOrder}>{!isOpenNow?"Local cerrado":sending ? "Enviando…" : `${activeOrder?"Actualizar":"Enviar"} pedido · ${money((activeOrder?.total??0)+total)}`}</button></div></div>}
       {serviceOpen&&<div className="modal-back"><div className="checkout-modal service-modal"><button className="close" onClick={()=>{setServiceOpen(false);setServiceType(null);setError("")}}>×</button><span className="eyebrow">ATENCIÓN EN SU MESA</span><h2>¿En qué podemos ayudarle?</h2><p>Enviaremos una alerta al personal para <b>{location?.name}</b>.</p><div className="service-options">{serviceOptions.map(option=><button className={serviceType===option.type?"selected":""} onClick={()=>setServiceType(option.type)} key={option.type}><span>{option.icon}</span><div><strong>{option.type}</strong><small>{option.help}</small></div><i>{serviceType===option.type?"✓":"›"}</i></button>)}</div>{serviceType&&<label>Detalle opcional<textarea value={serviceNote} onChange={event=>setServiceNote(event.target.value)} maxLength={300} placeholder={serviceType==="Otra solicitud"?"Cuéntenos qué necesita...":"Puede agregar una indicación..."}/></label>}{error&&<div className="form-error">{error}</div>}<button className="checkout-btn" disabled={!serviceType||sending} onClick={submitServiceRequest}>{sending?"Enviando…":"Enviar solicitud"}</button></div></div>}
-      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>{activeOrder?"¡Pedido actualizado!":"¡Pedido recibido!"}</h2><p>{activeOrder?"El local recibió los cambios en el mismo pedido.":"El pedido ya apareció en el panel del local."}</p><b>Pedido #{success.id} · {success.locationName}</b><button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
+      {success && <div className="modal-back"><div className="success"><span>✓</span><h2>{activeOrder?"¡Pedido actualizado!":"¡Pedido recibido!"}</h2><p>{success.whatsappUrl?"Falta un último paso: envíe la confirmación por WhatsApp al restaurante.":activeOrder?"El local recibió los cambios en el mismo pedido.":"El pedido ya apareció en el panel del local."}</p><b>Pedido #{success.id} · {success.locationName}</b>{success.whatsappUrl&&<a className="whatsapp-confirm" href={success.whatsappUrl} target="_blank" rel="noreferrer">Confirmar por WhatsApp →</a>}<button onClick={() => setSuccess(null)}>Volver al menú</button></div></div>}
       {serviceSent&&<div className="modal-back"><div className="success service-success"><span>🔔</span><h2>Solicitud enviada</h2><p>El personal recibió la alerta y se acercará tan pronto como sea posible.</p><b>{serviceSent}</b><button onClick={()=>setServiceSent("")}>Entendido</button></div></div>}
     </main>
   );

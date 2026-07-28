@@ -193,6 +193,11 @@ export async function ensureDatabase() {
           await sql`INSERT INTO locations (name, type) VALUES (${location[0]}, ${location[1]})`;
         }
       }
+      await sql`INSERT INTO locations (name, type) VALUES ('Domicilio', 'Otro') ON CONFLICT (name) DO NOTHING`;
+      await sql`UPDATE restaurant_settings SET
+        phone = CASE WHEN phone = '300 123 4567' THEN '+57 313 8866453' ELSE phone END,
+        whatsapp = CASE WHEN whatsapp = '573001234567' THEN '573138866453' ELSE whatsapp END
+        WHERE id = 1`;
     })().catch((error) => {
       initialized = null;
       throw error;
@@ -354,7 +359,7 @@ export async function createServiceRequest(input:{locationId:number;customerName
   if(!Number.isInteger(input.locationId)||!serviceRequestTypes.includes(input.requestType))throw new Error("Seleccione una solicitud válida.");
   const [location]=await sql<{id:number;name:string;type:string}[]>`SELECT id::int,name,type FROM locations WHERE id=${input.locationId} AND active=TRUE`;
   if(!location)throw new Error("La ubicación seleccionada no está disponible.");
-  if(location.type==="Otro"&&location.name.toLowerCase().includes("llevar"))throw new Error("La atención a mesa solo está disponible dentro del local.");
+  if(location.type==="Otro"&&(location.name.toLowerCase().includes("llevar")||location.name.toLowerCase().includes("domicilio")))throw new Error("La atención a mesa solo está disponible dentro del local.");
   const [duplicate]=await sql<{id:number}[]>`SELECT id::int FROM service_requests
     WHERE location_id=${location.id} AND request_type=${input.requestType} AND status='Pendiente'
       AND created_at > NOW() - INTERVAL '3 minutes' LIMIT 1`;

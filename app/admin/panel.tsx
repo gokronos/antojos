@@ -330,7 +330,7 @@ function OrderCard({ order, saving, onStatus,onPaid,onAcknowledge,onDelete }: { 
     <div className="order-head"><div><span>#{order.id}</span><strong>{order.locationName}</strong>{order.modified&&<b className="modified-badge">MODIFICADO</b>}</div><small>{ago(order.updatedAt||order.createdAt)}</small></div>
     <h3>{order.customerName}</h3>
     <div className="order-lines">{order.items.map((item,index)=><div className="order-line" key={`${item.productId}-${index}`}><span><b>{item.quantity}×</b> {item.productName}</span><span>{money(item.unitPrice)}</span><strong>{money(item.unitPrice*item.quantity)}</strong></div>)}</div>
-    {order.notes && <small className="order-note">Nota: {order.notes}</small>}
+    {order.notes && <small className="order-note"><b>Datos del pedido:</b>{"\n"}{order.notes}</small>}
     {order.updateNote&&<div className="update-note"><b>↻ Novedad del cliente</b><span>{order.updateNote}</span><button disabled={saving} onClick={onAcknowledge}>Marcar revisado</button></div>}
     <div className="order-foot"><div><small>Total para cobrar</small><strong>{money(order.total)}</strong></div><button className={`paid-button ${order.paid?"paid":""}`} disabled={saving} onClick={()=>onPaid(!order.paid)}>{order.paid?"✓ Cobrado":"Marcar cobrado"}</button><select className={`status status-${statuses.indexOf(order.status)}`} value={order.status} disabled={saving} onChange={(event) => onStatus(event.target.value as OrderStatus)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{onDelete&&<button className="delete-order" disabled={saving} onClick={onDelete}>Eliminar pedido</button>}</div>
   </article>;
