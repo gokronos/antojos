@@ -93,6 +93,19 @@ export async function ensureDatabase() {
       await sql`CREATE TABLE IF NOT EXISTS categories (
         id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE, position INTEGER NOT NULL DEFAULT 0
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS customers (
+        id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL UNIQUE,
+        internal_notes TEXT NOT NULL DEFAULT '', first_order_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_order_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
+      await sql`CREATE TABLE IF NOT EXISTS customer_addresses (
+        id BIGSERIAL PRIMARY KEY, customer_id BIGINT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        address TEXT NOT NULL, neighborhood TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '',
+        is_primary BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(customer_id, address, neighborhood)
+      )`;
       await sql`CREATE TABLE IF NOT EXISTS orders (
         id BIGSERIAL PRIMARY KEY, location_id BIGINT REFERENCES locations(id),
         location_name TEXT NOT NULL, customer_name TEXT NOT NULL,
@@ -116,6 +129,7 @@ export async function ensureDatabase() {
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee INTEGER`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_quote_status TEXT NOT NULL DEFAULT 'No aplica'`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_minutes INTEGER`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customers(id)`;
       await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_customer_token ON orders(customer_token) WHERE customer_token IS NOT NULL`;
       await sql`UPDATE orders SET status='En preparación' WHERE status IN ('Preparando','Listo')`;
       await sql`CREATE TABLE IF NOT EXISTS order_items (
@@ -266,6 +280,7 @@ export async function createOrder(input: {
   neighborhood?:string;
   addressReference?:string;
   paymentMethod?:string;
+  saveCustomer?:boolean;
 }) {
   await ensureDatabase();
   const sql = database();
@@ -302,13 +317,29 @@ export async function createOrder(input: {
   const total = productsTotal + packagingTotal;
   return sql.begin(async (transaction) => {
     const customerToken = crypto.randomUUID();
+    let customerId:number|null=null;
+    const normalizedPhone=customerPhone.replace(/\D/g,"");
+    if(input.saveCustomer&&normalizedPhone.length>=7) {
+      const [customer]=await transaction<{id:number}[]>`
+        INSERT INTO customers(name,phone) VALUES(${customerName},${normalizedPhone})
+        ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,last_order_at=NOW(),updated_at=NOW()
+        RETURNING id::int`;
+      customerId=customer.id;
+      if(isDelivery&&deliveryAddress) {
+        await transaction`UPDATE customer_addresses SET is_primary=FALSE WHERE customer_id=${customerId}`;
+        await transaction`INSERT INTO customer_addresses(customer_id,address,neighborhood,reference,is_primary)
+          VALUES(${customerId},${deliveryAddress},${neighborhood},${addressReference},TRUE)
+          ON CONFLICT(customer_id,address,neighborhood) DO UPDATE SET
+            reference=EXCLUDED.reference,is_primary=TRUE,updated_at=NOW()`;
+      }
+    }
     const [created] = await transaction<{ id: number }[]>`
       INSERT INTO orders (location_id, location_name, customer_name, notes, total, packaging_total, customer_token,
         order_type, customer_phone, delivery_address, neighborhood, address_reference, payment_method,
-        payment_status, delivery_quote_status)
+        payment_status, delivery_quote_status, customer_id)
       VALUES (${location.id}, ${location.name}, ${customerName}, ${notes}, ${total}, ${packagingTotal}, ${customerToken},
         ${orderType}, ${customerPhone}, ${deliveryAddress}, ${neighborhood}, ${addressReference}, ${paymentMethod},
-        ${paymentMethod==="Transferencia"?"Transferencia por verificar":"Pendiente"}, ${isDelivery?"Por cotizar":"No aplica"})
+        ${paymentMethod==="Transferencia"?"Transferencia por verificar":"Pendiente"}, ${isDelivery?"Por cotizar":"No aplica"}, ${customerId})
       RETURNING id::int
     `;
     for (const product of products) {
@@ -427,7 +458,7 @@ export async function adminData(periodDays = 1) {
   await ensureDatabase();
   const sql = database();
   const days = [1, 7, 15, 30].includes(periodDays) ? periodDays : 1;
-  const [products, locations, orders, items, serviceRequests, [stats], [settings], banners, schedule, categories, users] = await Promise.all([
+  const [products, locations, orders, items, serviceRequests, [stats], [settings], banners, schedule, categories, users, customers] = await Promise.all([
     sql<ProductRecord[]>`SELECT id::int, name, description, price, packaging_fee AS "packagingFee", category, icon, images, active FROM products ORDER BY id`,
     sql<LocationRecord[]>`SELECT id::int, name, type, active FROM locations ORDER BY id`,
     sql<Record<string, unknown>[]>`SELECT id::int, location_id::int, location_name, customer_name, notes, total, packaging_total,
@@ -452,6 +483,13 @@ export async function adminData(periodDays = 1) {
     sql<ScheduleRecord[]>`SELECT weekday::int, day, to_char(open_time,'HH24:MI') AS "openTime", to_char(close_time,'HH24:MI') AS "closeTime", enabled FROM schedule_days ORDER BY weekday`,
     sql<{id:number;name:string;position:number}[]>`SELECT id::int, name, position FROM categories ORDER BY position, name`,
     sql<AdminUserRecord[]>`SELECT id::int,name,username,role,active,created_at AS "createdAt" FROM admin_users ORDER BY id`,
+    sql<Record<string,unknown>[]>`SELECT c.id::int,c.name,c.phone,c.internal_notes,c.first_order_at,c.last_order_at,
+      COUNT(o.id)::int AS order_count,COALESCE(SUM(o.total) FILTER(WHERE o.status!='Cancelado'),0)::int AS total_spent,
+      COALESCE((SELECT json_agg(json_build_object('id',a.id,'address',a.address,'neighborhood',a.neighborhood,
+        'reference',a.reference,'isPrimary',a.is_primary) ORDER BY a.is_primary DESC,a.updated_at DESC)
+        FROM customer_addresses a WHERE a.customer_id=c.id),'[]'::json) AS addresses
+      FROM customers c LEFT JOIN orders o ON o.customer_id=c.id
+      GROUP BY c.id ORDER BY c.last_order_at DESC`,
   ]);
   return {
     products,
@@ -481,7 +519,23 @@ export async function adminData(periodDays = 1) {
     schedule,
     categories,
     users,
+    customers:customers.map(customer=>({id:customer.id,name:customer.name,phone:customer.phone,
+      internalNotes:customer.internal_notes,firstOrderAt:customer.first_order_at,lastOrderAt:customer.last_order_at,
+      orderCount:customer.order_count,totalSpent:customer.total_spent,addresses:customer.addresses})),
   };
+}
+
+export async function saveCustomerNotes(id:number,notes:string) {
+  await ensureDatabase();
+  await database()`UPDATE customers SET internal_notes=${notes.trim().slice(0,500)},updated_at=NOW() WHERE id=${id}`;
+}
+
+export async function deleteCustomer(id:number) {
+  await ensureDatabase();
+  await database().begin(async transaction=>{
+    await transaction`UPDATE orders SET customer_id=NULL WHERE customer_id=${id}`;
+    await transaction`DELETE FROM customers WHERE id=${id}`;
+  });
 }
 
 function bytesToHex(bytes:Uint8Array) {

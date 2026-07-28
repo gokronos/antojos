@@ -17,8 +17,9 @@ type AdminRole="Superadministrador"|"Propietario"|"Administrador"|"Caja"|"Cocina
 type AdminSession={id:number;name:string;username:string;role:AdminRole;expires:number};
 type AdminUser={id?:number;name:string;username:string;role:AdminRole;active:boolean;password?:string;createdAt?:string};
 type ServiceRequest={id:number;locationId:number;locationName:string;customerName:string;requestType:string;note:string;status:"Pendiente"|"Atendida";createdAt:string;attendedAt:string|null};
-type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; serviceRequests:ServiceRequest[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[];users:AdminUser[] };
-type Section = "orders" | "products" | "locations" | "history" | "users" | "branding" | "settings";
+type Customer={id:number;name:string;phone:string;internalNotes:string;firstOrderAt:string;lastOrderAt:string;orderCount:number;totalSpent:number;addresses:{id:number;address:string;neighborhood:string;reference:string;isPrimary:boolean}[]};
+type AdminData = { products: Product[]; locations: Location[]; orders: Order[]; serviceRequests:ServiceRequest[]; stats: { count: number; sales: number; average: number; periodDays:number }; settings: Settings; banners: Banner[]; schedule: ScheduleDay[]; categories:Category[];users:AdminUser[];customers:Customer[] };
+type Section = "orders" | "products" | "locations" | "history" | "customers" | "users" | "branding" | "settings";
 type InstallPrompt = Event & { prompt: () => Promise<void> };
 type ManualOrder = { customerName: string; locationId: number; notes: string; items: Record<number, number> };
 
@@ -74,6 +75,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
   const [modifiedOnly,setModifiedOnly]=useState(false);
   const [periodDays,setPeriodDays]=useState<1|7|15|30>(1);
   const [editingUser,setEditingUser]=useState<AdminUser|null>(null);
+  const [customerSearch,setCustomerSearch]=useState("");
   const [alertedOrderIds, setAlertedOrderIds] = useState<Set<number>>(new Set());
   const [alertedServiceIds, setAlertedServiceIds] = useState<Set<number>>(new Set());
   const [alertedModifiedIds, setAlertedModifiedIds] = useState<Set<number>>(new Set());
@@ -212,6 +214,7 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
         {canManage&&<button className={section === "products" ? "active" : ""} onClick={() => setSection("products")}><i>🍽️</i><span>Productos</span></button>}
         {canManage&&<button className={section === "locations" ? "active" : ""} onClick={() => setSection("locations")}><i>📍</i><span>Mesas</span></button>}
         {canSeeHistory&&<button className={section === "history" ? "active" : ""} onClick={() => setSection("history")}><i>📊</i><span>Historial</span></button>}
+        {canManage&&<button className={section === "customers" ? "active" : ""} onClick={() => setSection("customers")}><i>👤</i><span>Clientes</span></button>}
         {["Superadministrador","Propietario"].includes(session.role)&&<button className={section === "users" ? "active" : ""} onClick={() => setSection("users")}><i>👥</i><span>Usuarios</span></button>}
         {canManage&&<button className={section === "branding" ? "active" : ""} onClick={() => setSection("branding")}><i>🎨</i><span>Diseño</span></button>}
         {canManage&&<button className={section === "settings" ? "active" : ""} onClick={() => setSection("settings")}><i>⚙️</i><span>Ajustes</span></button>}
@@ -270,6 +273,8 @@ export default function AdminPanel({ session }: { session:AdminSession }) {
             {history.length === 0 ? <div className="empty-state">Los pedidos terminados aparecerán aquí.</div> : history.map((order) => <div className="history-row" key={order.id}><strong>#{order.id} · {order.locationName}</strong><span>{order.customerName}</span><span>{new Date(order.createdAt).toLocaleString("es-CO")}</span><b>{money(order.total)}</b><span><em className={`status ${order.status.toLowerCase()}`}>{order.status}</em>{session.role==="Superadministrador"&&<button className="history-delete" onClick={async()=>{if(window.confirm(`¿Eliminar definitivamente el pedido #${order.id}?`))await action("deleteOrder",{id:order.id},"Pedido eliminado definitivamente.")}}>Eliminar</button>}</span></div>)}
           </div>
         </>}
+
+        {section==="customers"&&canManage&&<><div className="section-title page-section-title"><div><h2>Clientes</h2><p>{data.customers.length} clientes autorizaron guardar sus datos</p></div><label className="search">⌕<input value={customerSearch} onChange={event=>setCustomerSearch(event.target.value)} placeholder="Nombre o teléfono"/></label></div><div className="customer-admin-grid">{data.customers.filter(customer=>`${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.toLowerCase())).map(customer=><article key={customer.id}><div className="customer-admin-head"><span className="avatar">{customer.name.split(" ").map(part=>part[0]).slice(0,2).join("").toUpperCase()}</span><div><strong>{customer.name}</strong><a href={`https://wa.me/${customer.phone}`} target="_blank" rel="noreferrer">WhatsApp · {customer.phone}</a></div></div><div className="customer-metrics"><span><b>{customer.orderCount}</b> pedidos</span><span><b>{money(customer.totalSpent)}</b> comprado</span></div>{customer.addresses.map(address=><address key={address.id}><b>{address.neighborhood}</b><span>{address.address}</span>{address.reference&&<small>{address.reference}</small>}</address>)}{customer.internalNotes&&<p>Nota interna: {customer.internalNotes}</p>}<footer><button onClick={()=>{const notes=window.prompt("Nota interna del cliente",customer.internalNotes);if(notes!==null)action("saveCustomerNotes",{id:customer.id,notes},"Nota del cliente guardada.")}}>Editar nota</button><button className="danger" onClick={()=>{if(window.confirm(`¿Eliminar los datos guardados de ${customer.name}? Los pedidos permanecerán en el historial.`))action("deleteCustomer",{id:customer.id},"Cliente eliminado.")}}>Eliminar datos</button></footer></article>)}</div></>}
 
         {section==="users"&&["Superadministrador","Propietario"].includes(session.role)&&<>
           <div className="section-title page-section-title"><div><h2>Usuarios y roles</h2><p>Controle quién puede entrar y qué puede administrar</p></div><button onClick={()=>setEditingUser({name:"",username:"",role:"Administrador",active:true,password:""})}>＋ Crear usuario</button></div>
