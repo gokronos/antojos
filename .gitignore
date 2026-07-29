@@ -41,3 +41,7 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# Firebase credentials kept only on the build machine
+/android/app/google-services.json
+/firebase-service-account.json

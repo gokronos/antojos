@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getVapidKeys, removePushSubscription, savePushSubscription } from "../../../../db/service";
+import { getVapidKeys, removePushSubscription, saveFcmDevice, savePushSubscription } from "../../../../db/service";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,10 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+    if(typeof body.fcmToken==="string") {
+      await saveFcmDevice(body.fcmToken);
+      return NextResponse.json({ok:true,message:"Dispositivo Android registrado."});
+    }
     const subscription = body.subscription || body;
 
     if (!subscription || !subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {

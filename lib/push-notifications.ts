@@ -1,5 +1,7 @@
 import webpush from "web-push";
-import { getPushSubscriptions, getVapidKeys, removePushSubscription } from "../db/service";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getMessaging } from "firebase-admin/messaging";
+import { deactivateFcmDevices, getFcmDevices, getPushSubscriptions, getVapidKeys, removePushSubscription } from "../db/service";
 
 export async function sendPushNotificationToAdmins(payload: {
   title: string;
@@ -22,9 +24,6 @@ export async function sendPushNotificationToAdmins(payload: {
     );
 
     const subscriptions = await getPushSubscriptions();
-    if (!subscriptions || subscriptions.length === 0) {
-      return;
-    }
 
     const pushPayload = JSON.stringify({
       title: payload.title,
@@ -58,6 +57,36 @@ export async function sendPushNotificationToAdmins(payload: {
     });
 
     await Promise.allSettled(sendPromises);
+
+    const serviceAccountJson=process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    const devices=await getFcmDevices();
+    if(serviceAccountJson&&devices.length) {
+      try {
+        if(!getApps().length)initializeApp({credential:cert(JSON.parse(serviceAccountJson))});
+        const response=await getMessaging().sendEachForMulticast({
+          tokens:devices.map(device=>device.token),
+          notification:{title:payload.title,body:payload.body},
+          data:{url:payload.url??"/admin",tag:payload.tag??"new-order"},
+          android:{
+            priority:"high",
+            notification:{
+              channelId:"orders_v3",
+              sound:"alert",
+              priority:"max",
+              defaultVibrateTimings:false,
+              vibrateTimingsMillis:[0,500,200,500,200,700],
+              visibility:"public",
+            },
+          },
+        });
+        const invalid=response.responses.flatMap((result,index)=>
+          !result.success&&["messaging/registration-token-not-registered","messaging/invalid-registration-token"].includes(result.error?.code??"")
+            ?[devices[index].token]:[]);
+        await deactivateFcmDevices(invalid);
+      } catch(error) {
+        console.error("Error enviando notificación FCM:",error);
+      }
+    }
   } catch (error) {
     console.error("Error al procesar envío de notificaciones push:", error);
   }

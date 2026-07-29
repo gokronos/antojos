@@ -1,5 +1,7 @@
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { Haptics, ImpactStyle } from "@capacitor/haptics";
+import { PushNotifications } from "@capacitor/push-notifications";
+import { Capacitor } from "@capacitor/core";
 
 type OrderNotificationState = {
   orderId: number;
@@ -8,6 +10,7 @@ type OrderNotificationState = {
 };
 
 const activeNotifications = new Map<number, OrderNotificationState>();
+let nativePushInitialized=false;
 
 let cachedAudioCtx: AudioContext | null = null;
 
@@ -146,7 +149,8 @@ export async function alertNewOrder(
         id: item.id,
         title,
         body: item.body,
-        channelId: "orders_v2",
+        channelId: "orders_v3",
+        sound:"alert.wav",
         smallIcon: "ic_launcher",
         iconColor: "#FF6B6B",
         autoCancel: false,
@@ -195,7 +199,8 @@ export async function alertServiceRequest(
           id: notificationId,
           title,
           body,
-          channelId: "orders_v2",
+          channelId: "orders_v3",
+          sound:"alert.wav",
           smallIcon: "ic_launcher",
           iconColor: "#FF6B6B",
           schedule: { at: new Date(Date.now() + 200) },
@@ -228,7 +233,8 @@ export async function alertModifiedOrder(
           id: notificationId,
           title,
           body,
-          channelId: "orders_v2",
+          channelId: "orders_v3",
+          sound:"alert.wav",
           smallIcon: "ic_launcher",
           iconColor: "#FF6B6B",
           schedule: { at: new Date(Date.now() + 200) },
@@ -310,7 +316,8 @@ export async function testNotificationAlert() {
           id: testId,
           title: "🧪 PRUEBA DE NOTIFICACIÓN",
           body: "Si escuchas el sonido y ves esta notificación, las alertas de Antojos están activas.",
-          channelId: "orders_v2",
+          channelId: "orders_v3",
+          sound:"alert.wav",
           smallIcon: "ic_launcher",
           iconColor: "#FF6B6B",
         },
@@ -328,12 +335,13 @@ export async function initNotifications() {
   try {
     try {
       await LocalNotifications.createChannel({
-        id: "orders_v2",
+        id: "orders_v3",
         name: "Alertas de Pedidos y Mesas",
         description: "Notificaciones y alertas prioritarias para el restaurante",
         importance: 5,
         visibility: 1,
         vibration: true,
+        sound:"alert.wav",
       });
     } catch (e) {
       console.warn("No se pudo crear canal de notificaciones:", e);
@@ -342,7 +350,27 @@ export async function initNotifications() {
     const result = await LocalNotifications.requestPermissions();
     console.log("Permisos de notificaciones:", result.display);
 
-    await registerWebPush();
+    if(Capacitor.isNativePlatform()) {
+      if(!nativePushInitialized) {
+        nativePushInitialized=true;
+        await PushNotifications.addListener("registration",async token=>{
+          await fetch("/api/push/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({fcmToken:token.value})});
+        });
+        await PushNotifications.addListener("registrationError",error=>console.warn("No fue posible registrar Firebase:",error));
+        await PushNotifications.addListener("pushNotificationReceived",async notification=>{
+          await vibrate();playAlertSound();
+          await LocalNotifications.schedule({notifications:[{
+            id:Math.floor(Math.random()*2000000000),title:notification.title??"🔔 Alerta de Antojos",
+            body:notification.body??"Hay una nueva actualización.",channelId:"orders_v3",sound:"alert.wav",
+          }]});
+        });
+        await PushNotifications.addListener("pushNotificationActionPerformed",()=>{window.location.href="/admin";});
+      }
+      const pushPermission=await PushNotifications.requestPermissions();
+      if(pushPermission.receive==="granted")await PushNotifications.register();
+    } else {
+      await registerWebPush();
+    }
 
     return true;
   } catch (error) {

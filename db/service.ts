@@ -171,6 +171,11 @@ export async function ensureDatabase() {
         auth TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`;
+      await sql`CREATE TABLE IF NOT EXISTS fcm_devices (
+        id BIGSERIAL PRIMARY KEY, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL DEFAULT 'android',
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`;
       await sql`CREATE TABLE IF NOT EXISTS banners (
         id BIGSERIAL PRIMARY KEY, eyebrow TEXT NOT NULL, title TEXT NOT NULL,
         text TEXT NOT NULL, image TEXT NOT NULL DEFAULT '', active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -804,6 +809,24 @@ export async function savePushSubscription(sub: { endpoint: string; p256dh: stri
     VALUES (${sub.endpoint}, ${sub.p256dh}, ${sub.auth})
     ON CONFLICT (endpoint) DO UPDATE SET p256dh = ${sub.p256dh}, auth = ${sub.auth}
   `;
+}
+
+export async function saveFcmDevice(token:string) {
+  await ensureDatabase();
+  const normalized=token.trim().slice(0,500);
+  if(normalized.length<20)throw new Error("Token FCM inválido.");
+  await database()`INSERT INTO fcm_devices(token) VALUES(${normalized})
+    ON CONFLICT(token) DO UPDATE SET active=TRUE,updated_at=NOW()`;
+}
+
+export async function getFcmDevices() {
+  await ensureDatabase();
+  return database()<{token:string}[]>`SELECT token FROM fcm_devices WHERE active=TRUE ORDER BY updated_at DESC`;
+}
+
+export async function deactivateFcmDevices(tokens:string[]) {
+  await ensureDatabase();
+  if(tokens.length)await database()`UPDATE fcm_devices SET active=FALSE,updated_at=NOW() WHERE token IN ${database()(tokens)}`;
 }
 
 export async function removePushSubscription(endpoint: string) {
